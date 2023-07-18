@@ -149,8 +149,7 @@ fn extract<P: AsRef<Path>>(filename: P, outpath: P) -> anyhow::Result<()> {
 }
 
 fn env_var_rerun(name: &str) -> Result<String, env::VarError> {
-    // 为了避免rust-analyzer引起的没必要的rebuild
-    // println!("cargo:rerun-if-env-changed={name}");
+    println!("cargo:rerun-if-env-changed={name}");
     env::var(name)
 }
 

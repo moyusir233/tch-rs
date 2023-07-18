@@ -1,0 +1,10 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/torch-sys/libtch",
+    "cmake.buildDirectory": "${workspaceFolder}/torch-sys/libtch/cmake-build-debug",
+    "rust-analyzer.cargo.extraEnv": {
+        // 使用python版本编译好的libtorch
+        "LIBTORCH_USE_PYTORCH": "1",
+        // 跳过版本检查,容器中安装的是pytorch 2.0.1的版本
+        "LIBTORCH_BYPASS_VERSION_CHECK": "1",
+    }
+}
