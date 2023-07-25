@@ -16,3 +16,4 @@ __pycache__
 *.so
 *.dylib
 llama-tokenizer.json
+cmake-build-debug/
