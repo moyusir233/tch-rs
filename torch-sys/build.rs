@@ -409,6 +409,60 @@ impl SystemInfo {
         };
     }
 
+    // 利用cmake编译封装libtorch的代码,包括cxx生成的相关源文件
+    fn cmake(&self, use_cuda: bool, use_hip: bool) {
+        let cuda_dependency = if use_cuda || use_hip {
+            "libtch/dummy_cuda_dependency.cpp"
+        } else {
+            "libtch/fake_cuda_dependency.cpp"
+        };
+        println!("cargo:rerun-if-changed={}", cuda_dependency);
+        println!("cargo:rerun-if-changed=libtch/torch_python.cpp");
+        println!("cargo:rerun-if-changed=libtch/torch_python.h");
+        println!("cargo:rerun-if-changed=libtch/torch_api_generated.cpp");
+        println!("cargo:rerun-if-changed=libtch/torch_api_generated.h");
+        println!("cargo:rerun-if-changed=libtch/torch_api.cpp");
+        println!("cargo:rerun-if-changed=libtch/torch_api.h");
+        println!("cargo:rerun-if-changed=libtch/stb_image_write.h");
+        println!("cargo:rerun-if-changed=libtch/stb_image_resize.h");
+        println!("cargo:rerun-if-changed=libtch/stb_image.h");
+        let mut c_files =
+            vec!["libtch/torch_api.cpp", "libtch/torch_api_generated.cpp", cuda_dependency];
+        if cfg!(feature = "python-extension") {
+            c_files.push("libtch/torch_python.cpp")
+        }
+
+        match self.os {
+            Os::Linux | Os::Macos => {
+                // Pass the libtorch lib dir to crates that use torch-sys. This will be available
+                // as DEP_TORCH_SYS_LIBTORCH_LIB, see:
+                // https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
+                println!("cargo:libtorch_lib={}", self.libtorch_lib_dir.display());
+                cc::Build::new()
+                    .cpp(true)
+                    .pic(true)
+                    .warnings(false)
+                    .includes(&self.libtorch_include_dirs)
+                    .flag(&format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()))
+                    .flag("-std=c++14")
+                    .flag(&format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi))
+                    .files(&c_files)
+                    .compile("tch");
+            }
+            Os::Windows => {
+                // TODO: Pass "/link" "LIBPATH:{}" to cl.exe in order to emulate rpath.
+                //       Not yet supported by cc=rs.
+                //       https://github.com/alexcrichton/cc-rs/issues/323
+                cc::Build::new()
+                    .cpp(true)
+                    .pic(true)
+                    .warnings(false)
+                    .includes(&self.libtorch_include_dirs)
+                    .files(&c_files)
+                    .compile("tch");
+            }
+        };
+    }
     fn link(&self, lib_name: &str) {
         match self.link_type {
             LinkType::Dynamic => println!("cargo:rustc-link-lib={lib_name}"),
