@@ -2,10 +2,14 @@ cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 project(tch)
 
 if (DEFINED CARGO_BUILD)
+    # 库名称
+    set(lib_name "${CARGO_CXX_LIB_NAME}")
+    # 编译选项
+    set(compile_flags "${CARGO_CXX_COMPILE_FLAGS}")
     # 头文件目录
     set(header_dirs "${CARGO_CXX_INCLUDE_DIRS}")
-    # 源文件目录
-    set(src "${CARGO_CXX_SRC_DIRS}")
+    # 所有的源文件
+    set(src "${CARGO_CXX_SRC}")
     # cuda头文件目录
     if (DEFINED CARGO_USE_CUDA)
         set(USE_CUDA "")
@@ -16,10 +20,23 @@ if (DEFINED CARGO_BUILD)
     # libtroch库目录
     set(TORCH_LIBRARIES "${CARGO_TORCH_LIBRARIES}")
 else()
-    # 默认为include目录
-    set(header_dirs "include")
-    # 默认为src目录
-    set(src "src")
+    set(lib_name "tch")
+    # 默认编译选项
+    set(compile_flags "-fPIC")
+    # 默认为include、cxx-wrapper目录以及cxx头文件目录
+    set(CARGO_OUT_DIR "/workspace/tch-rs/target" )
+    set(header_dirs 
+            "${CMAKE_SOURCE_DIR}/include" 
+            "${CMAKE_SOURCE_DIR}/include/cxx-wrapper"
+            "${CARGO_OUT_DIR}/cxxbridge/torch-sys/src/cxx_wrapper"
+            "${CARGO_OUT_DIR}/cxxbridge/rust"
+    )
+
+    # 默认为src目录下的所有文件以及cargo OUT_DIR目录下的cxx源文件
+    file(GLOB_RECURSE src "${CMAKE_SOURCE_DIR}/src/*" "${CARGO_OUT_DIR}/cxxbridge/torch-sys/src/cxx_wrapper/*.cc")
+    # 过滤掉fake的cuda文件
+    list(FILTER src EXCLUDE REGEX ".*fake_cuda_dependency.cpp$")
+
     # 默认启用cuda,且使用conda安装的cuda头文件目录
     set(USE_CUDA "")
     set(CUDA_INCLUDE_DIRS "/opt/conda/include")
@@ -40,17 +57,11 @@ endif()
 # 导入自定义的头文件
 include_directories("${header_dirs}")
 
-# 搜索源文件
-file(GLOB_RECURSE cxx_sources "${src}/*")
-if (DEFINED USE_CUDA)
-    # 过滤掉fake的cuda文件
-    list(FILTER cxx_sources EXCLUDE REGEX ".*fake_cuda_dependency.cpp$")
-else()
-    # 过滤掉使用cuda的源文件
-    list(FILTER cxx_sources EXCLUDE REGEX ".*dummy_cuda_dependency.cpp$")
-endif()
 
-add_library(tch SHARED ${cxx_sources})
-target_link_libraries(tch "${TORCH_LIBRARIES}")
-set_property(TARGET tch PROPERTY CXX_STANDARD 14)
-install(TARGETS tch DESTINATION .)
+# 添加编译flag
+add_compile_options("${compile_flags}")
+
+add_library("${lib_name}" SHARED ${src})
+target_link_libraries("${lib_name}" "${TORCH_LIBRARIES}")
+set_property(TARGET "${lib_name}" PROPERTY CXX_STANDARD 14)
+install(TARGETS "${lib_name}" DESTINATION .)

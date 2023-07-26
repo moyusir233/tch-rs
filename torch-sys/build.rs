@@ -7,8 +7,10 @@
 // like 9.0, 90, or cu90 to specify the version of CUDA to use for libtorch.
 
 use anyhow::{Context, Result};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
+use walkdir::WalkDir;
 
 const TORCH_VERSION: &str = "2.0.0";
 const PYTHON_PRINT_PYTORCH_DETAILS: &str = r"
@@ -59,6 +61,23 @@ struct SystemInfo {
     libtorch_include_dirs: Vec<PathBuf>,
     libtorch_lib_dir: PathBuf,
     link_type: LinkType,
+}
+
+// 负责利用cmake编译c++依赖库
+#[derive(Default)]
+struct TchCmakeBuilder {
+    // 编译选项
+    compile_flags: Vec<String>,
+    // 头文件目录
+    header_dirs: Vec<PathBuf>,
+    // 源文件
+    src: Vec<PathBuf>,
+    // cuda头文件目录
+    cuda_include_dirs: Vec<PathBuf>,
+    // libtorch头文件目录
+    torch_include_dirs: Vec<PathBuf>,
+    // libtroch库目录
+    torch_libraries: Vec<PathBuf>,
 }
 
 #[cfg(feature = "ureq")]
@@ -169,6 +188,86 @@ fn version_check(version: &str) -> Result<()> {
     Ok(())
 }
 
+// 递归获得指定目录下的所有文件
+fn get_all_file_path(dir: impl AsRef<Path>) -> Vec<PathBuf> {
+    WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|item| {
+            let entry = item.context("failed to get `DirEntry`").unwrap();
+            let path = entry.path();
+            if path.is_file() {
+                Some(path.to_owned())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+impl TchCmakeBuilder {
+    // 将结构体实例中保存的参数转换为cmake文件所需的参数
+    fn config_cmake(
+        &self,
+        cmake_config: &mut cmake::Config,
+        lib_name: &str,
+        use_cuda: bool,
+        use_hip: bool,
+    ) {
+        #[inline]
+        fn join_pathbufs(pathbufs: &[PathBuf], split: impl AsRef<OsStr>) -> OsString {
+            pathbufs.iter().map(|dir| dir.as_os_str()).collect::<Vec<_>>().join(split.as_ref())
+        }
+
+        const CMAKE_LIST_SPLIT: &str = ";";
+        // 设置表示是rust侧进行编译的flag
+        cmake_config.define("CARGO_BUILD", "");
+        // 设置lib名称
+        cmake_config.define("CARGO_CXX_LIB_NAME", lib_name);
+        // 设置编译选项
+        cmake_config.define("CARGO_CXX_COMPILE_FLAGS", self.compile_flags.join(CMAKE_LIST_SPLIT));
+        // 设置头文件目录
+        cmake_config
+            .define("CARGO_CXX_INCLUDE_DIRS", join_pathbufs(&self.header_dirs, CMAKE_LIST_SPLIT));
+        // 设置所有的源文件
+        cmake_config.define("CARGO_CXX_SRC", join_pathbufs(&self.src, CMAKE_LIST_SPLIT));
+        // 传递使用cuda的选项并设置cuda头文件目录
+        if use_cuda || use_hip {
+            cmake_config.define("CARGO_USE_CUDA", "");
+            cmake_config.define(
+                "CARGO_CUDA_INCLUDE_DIRS",
+                join_pathbufs(&self.cuda_include_dirs, CMAKE_LIST_SPLIT),
+            );
+        }
+        // 设置libtorch的头文件目录与库文件目录
+        cmake_config.define(
+            "CARGO_TORCH_INCLUDE_DIRS",
+            join_pathbufs(&self.torch_include_dirs, CMAKE_LIST_SPLIT),
+        );
+        cmake_config.define(
+            "CARGO_TORCH_LIBRARIES",
+            join_pathbufs(&self.torch_libraries, CMAKE_LIST_SPLIT),
+        );
+    }
+
+    fn build(&self, cmake_file_dir: PathBuf, lib_name: &str, use_cuda: bool, use_hip: bool) {
+        let mut cmake_config = cmake::Config::new(cmake_file_dir);
+        self.config_cmake(&mut cmake_config, lib_name, use_cuda, use_hip);
+
+        let dst = cmake_config.build();
+        dst.try_exists().expect("failed to cmake build");
+        println!("cargo:rustc-link-search=native={}", dst.display());
+
+        self.header_dirs
+            .iter()
+            .flat_map(get_all_file_path)
+            .chain(self.src.iter().cloned())
+            .for_each(|path| {
+                // 确保源文件和头文件都为绝对路径
+                assert!(path.is_absolute());
+                println!("cargo:rerun-if-changed={}", path.display());
+            });
+    }
+}
 impl SystemInfo {
     fn new() -> Result<Self> {
         let os = match env::var("CARGO_CFG_TARGET_OS").expect("Unable to get TARGET_OS").as_str() {
@@ -355,26 +454,27 @@ impl SystemInfo {
         }
     }
 
+    #[allow(dead_code)]
     fn make(&self, use_cuda: bool, use_hip: bool) {
         let cuda_dependency = if use_cuda || use_hip {
-            "libtch/dummy_cuda_dependency.cpp"
+            "libtch/src/dummy_cuda_dependency.cpp"
         } else {
-            "libtch/fake_cuda_dependency.cpp"
+            "libtch/src/fake_cuda_dependency.cpp"
         };
         println!("cargo:rerun-if-changed={}", cuda_dependency);
-        println!("cargo:rerun-if-changed=libtch/torch_python.cpp");
-        println!("cargo:rerun-if-changed=libtch/torch_python.h");
-        println!("cargo:rerun-if-changed=libtch/torch_api_generated.cpp");
-        println!("cargo:rerun-if-changed=libtch/torch_api_generated.h");
-        println!("cargo:rerun-if-changed=libtch/torch_api.cpp");
-        println!("cargo:rerun-if-changed=libtch/torch_api.h");
-        println!("cargo:rerun-if-changed=libtch/stb_image_write.h");
-        println!("cargo:rerun-if-changed=libtch/stb_image_resize.h");
-        println!("cargo:rerun-if-changed=libtch/stb_image.h");
+        println!("cargo:rerun-if-changed=libtch/src/torch_python.cpp");
+        println!("cargo:rerun-if-changed=libtch/include/torch_python.h");
+        println!("cargo:rerun-if-changed=libtch/src/torch_api_generated.cpp");
+        println!("cargo:rerun-if-changed=libtch/include/torch_api_generated.h");
+        println!("cargo:rerun-if-changed=libtch/src/torch_api.cpp");
+        println!("cargo:rerun-if-changed=libtch/include/torch_api.h");
+        println!("cargo:rerun-if-changed=libtch/include/stb_image_write.h");
+        println!("cargo:rerun-if-changed=libtch/include/stb_image_resize.h");
+        println!("cargo:rerun-if-changed=libtch/include/stb_image.h");
         let mut c_files =
-            vec!["libtch/torch_api.cpp", "libtch/torch_api_generated.cpp", cuda_dependency];
+            vec!["libtch/src/torch_api.cpp", "libtch/src/torch_api_generated.cpp", cuda_dependency];
         if cfg!(feature = "python-extension") {
-            c_files.push("libtch/torch_python.cpp")
+            c_files.push("libtch/src/torch_python.cpp")
         }
 
         match self.os {
@@ -387,6 +487,7 @@ impl SystemInfo {
                     .cpp(true)
                     .pic(true)
                     .warnings(false)
+                    .include("libtch/include")
                     .includes(&self.libtorch_include_dirs)
                     .flag(&format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()))
                     .flag("-std=c++14")
@@ -410,27 +511,78 @@ impl SystemInfo {
     }
 
     // 利用cmake编译封装libtorch的代码,包括cxx生成的相关源文件
+    #[allow(dead_code)]
     fn cmake(&self, use_cuda: bool, use_hip: bool) {
+        let mut cmake_builder = TchCmakeBuilder::default();
+        let current_dir: PathBuf = env_var_rerun("CARGO_MANIFEST_DIR")
+            .context("failed to get `CARGO_MANIFEST_DIR`")
+            .unwrap()
+            .into();
+        let cmake_file_dir = current_dir.join("libtch");
+
+        // 传入相关的rust源文件来产生cxx相关的文件
+        let cxx_rs_dir = "src/cxx_wrapper";
+        let _ = cxx_build::bridges(get_all_file_path(cxx_rs_dir));
+
         let cuda_dependency = if use_cuda || use_hip {
-            "libtch/dummy_cuda_dependency.cpp"
+            "src/dummy_cuda_dependency.cpp"
         } else {
-            "libtch/fake_cuda_dependency.cpp"
+            "src/fake_cuda_dependency.cpp"
         };
-        println!("cargo:rerun-if-changed={}", cuda_dependency);
-        println!("cargo:rerun-if-changed=libtch/torch_python.cpp");
-        println!("cargo:rerun-if-changed=libtch/torch_python.h");
-        println!("cargo:rerun-if-changed=libtch/torch_api_generated.cpp");
-        println!("cargo:rerun-if-changed=libtch/torch_api_generated.h");
-        println!("cargo:rerun-if-changed=libtch/torch_api.cpp");
-        println!("cargo:rerun-if-changed=libtch/torch_api.h");
-        println!("cargo:rerun-if-changed=libtch/stb_image_write.h");
-        println!("cargo:rerun-if-changed=libtch/stb_image_resize.h");
-        println!("cargo:rerun-if-changed=libtch/stb_image.h");
-        let mut c_files =
-            vec!["libtch/torch_api.cpp", "libtch/torch_api_generated.cpp", cuda_dependency];
+
+        // 源文件
+        let mut c_files: Vec<PathBuf> =
+            vec!["src/torch_api_generated.cpp".into(), cuda_dependency.into()];
         if cfg!(feature = "python-extension") {
-            c_files.push("libtch/torch_python.cpp")
+            c_files.push("src/torch_python.cpp".into())
         }
+
+        // 加入cxx相关的源文件,cxx源码中布局相关的注释如下,
+        // 其中`...`为用于生成cxx代码的rust源文件所在的目录的相对路径
+        // We lay out the OUT_DIR as follows. Everything is namespaced under a cxxbridge
+        // subdirectory to avoid stomping on other things that the caller's build script
+        // might be doing inside OUT_DIR.
+        //
+        //     $OUT_DIR/
+        //        cxxbridge/
+        //           crate/
+        //              $CARGO_PKG_NAME -> $CARGO_MANIFEST_DIR
+        //           include/
+        //              rust/
+        //                 cxx.h
+        //              $CARGO_PKG_NAME/
+        //                 .../
+        //                    lib.rs.h
+        //           sources/
+        //              $CARGO_PKG_NAME/
+        //                 .../
+        //                    lib.rs.cc
+        //
+        // The crate/ and include/ directories are placed on the #include path for the
+        // current build as well as for downstream builds that have a direct dependency
+        // on the current crate.
+        let out_dir: PathBuf =
+            env_var_rerun("OUT_DIR").context("failed to get cargo `OUT_DIR`").unwrap().into();
+        c_files.extend(get_all_file_path(cmake_file_dir.join("src/cxx-wrapper")));
+        // 加入cxx生成的源文件
+        c_files.extend(get_all_file_path(
+            out_dir.join("cxxbridge/sources/torch-sys").join(cxx_rs_dir),
+        ));
+
+        // 头文件目录
+        let mut header_dirs: Vec<PathBuf> = vec!["include".into(), "include/cxx-wrapper".into()];
+        // 加入cxx生成的头文件
+        header_dirs.extend([
+            out_dir.join("cxxbridge/include/torch-sys").join(cxx_rs_dir),
+            out_dir.join("cxxbridge/include/rust"),
+        ]);
+
+        // 补全头文件目录与源文件的路径
+        c_files.iter_mut().chain(header_dirs.iter_mut()).for_each(|path| {
+            if path.is_relative() {
+                *path = cmake_file_dir.join(&path);
+            }
+        });
 
         match self.os {
             Os::Linux | Os::Macos => {
@@ -438,21 +590,32 @@ impl SystemInfo {
                 // as DEP_TORCH_SYS_LIBTORCH_LIB, see:
                 // https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
                 println!("cargo:libtorch_lib={}", self.libtorch_lib_dir.display());
-                cc::Build::new()
-                    .cpp(true)
-                    .pic(true)
-                    .warnings(false)
-                    .includes(&self.libtorch_include_dirs)
-                    .flag(&format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()))
-                    .flag("-std=c++14")
-                    .flag(&format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi))
-                    .files(&c_files)
-                    .compile("tch");
+
+                // 编译选项
+                cmake_builder.compile_flags.extend([
+                    "-fPIC".into(),
+                    "-std=c++14".into(),
+                    format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi),
+                ]);
+                // torch头文件目录
+                cmake_builder.torch_include_dirs.extend(self.libtorch_include_dirs.iter().cloned());
+                // torch库文件目录
+                cmake_builder.torch_libraries.push(self.libtorch_lib_dir.clone());
+                // cuda头文件目录,使用conda安装的cuda
+                // TODO 引入相关环境变量
+                cmake_builder.cuda_include_dirs.push("/opt/conda/include".into());
+                // 头文件目录
+                cmake_builder.header_dirs.extend(header_dirs);
+                // 源文件
+                cmake_builder.src.extend(c_files);
+                // 进行编译
+                cmake_builder.build(cmake_file_dir, "tch", use_cuda, use_hip);
             }
             Os::Windows => {
                 // TODO: Pass "/link" "LIBPATH:{}" to cl.exe in order to emulate rpath.
                 //       Not yet supported by cc=rs.
                 //       https://github.com/alexcrichton/cc-rs/issues/323
+                // 对于windows,这里保持默认的编译流程
                 cc::Build::new()
                     .cpp(true)
                     .pic(true)
@@ -508,9 +671,10 @@ fn main() -> anyhow::Result<()> {
             si_lib.join("libtorch_hip.so").exists() || si_lib.join("torch_hip.dll").exists();
         println!("cargo:rustc-link-search=native={}", si_lib.display());
 
-        system_info.make(use_cuda, use_hip);
+        system_info.cmake(use_cuda, use_hip);
 
-        println!("cargo:rustc-link-lib=static=tch");
+        // println!("cargo:rustc-link-lib=static=tch");
+        println!("cargo:rustc-link-lib=tch");
         if use_cuda {
             system_info.link("torch_cuda")
         }
