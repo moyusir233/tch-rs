@@ -6,6 +6,8 @@ if (DEFINED CARGO_BUILD)
     set(lib_name "${CARGO_CXX_LIB_NAME}")
     # 编译选项
     set(compile_flags "${CARGO_CXX_COMPILE_FLAGS}")
+    # 链接选项
+    set(link_flags "${CARGO_CXX_LINK_FLAGS}")
     # 头文件目录
     set(header_dirs "${CARGO_CXX_INCLUDE_DIRS}")
     # 所有的源文件
@@ -17,16 +19,17 @@ if (DEFINED CARGO_BUILD)
     endif()
     # libtorch cmake文件目录
     set(Torch_DIR "${CARGO_TORCH_DIR}")
-    # # libtorch头文件目录
-    # set(TORCH_INCLUDE_DIRS "${CARGO_TORCH_INCLUDE_DIRS}")
-    # # libtroch库文件
-    # set(TORCH_LIBRARIES "${CARGO_TORCH_LIBRARIES}")
 else()
     set(lib_name "tch")
+    # 默认使用conda安装的Torch库
+    set(CONDA_TORCH_DIR "/opt/conda/lib/python3.10/site-packages/torch")
+    set(Torch_DIR "${CONDA_TORCH_DIR}/share/cmake/Torch")
     # 默认编译选项
     set(compile_flags "-fPIC")
+    # 默认链接选项
+    set(link_flags "-Wl,-rpath=${CONDA_TORCH_DIR}/lib")
     # 默认为include、cxx-wrapper目录以及cxx头文件目录
-    set(CARGO_OUT_DIR "/workspace/tch-rs/target" )
+    set(CARGO_OUT_DIR "$ENV{HOME}/tch-rs/target" )
     set(header_dirs 
             "${CMAKE_SOURCE_DIR}/include" 
             "${CMAKE_SOURCE_DIR}/include/cxx-wrapper"
@@ -41,15 +44,9 @@ else()
     # 过滤掉fake的cuda文件
     list(FILTER src EXCLUDE REGEX ".*fake_cuda_dependency.cpp$")
 
-    # 默认启用cuda,且使用conda安装的cuda头文件目录
+    # 默认启用cuda,且使用本地的cuda头文件
     set(USE_CUDA "")
-    set(CUDA_INCLUDE_DIRS "/opt/conda/include")
-
-    # 默认使用conda安装的Torch库
-    set(Torch_DIR "/opt/conda/lib/python3.10/site-packages/torch/share/cmake/Torch")
-    # set(CONDA_TORCH_DIR "/opt/conda/lib/python3.10/site-packages/torch")
-    # set(TORCH_INCLUDE_DIRS "${CONDA_TORCH_DIR}/include" "${CONDA_TORCH_DIR}/include/torch/csrc/api/include")
-    # file(GLOB_RECURSE TORCH_LIBRARIES "${CONDA_TORCH_DIR}/lib/*")
+    set(CUDA_INCLUDE_DIRS "/usr/local/cuda")
 endif()
 
 # Finds the Torch library
@@ -71,10 +68,10 @@ include_directories("${TORCH_INCLUDE_DIRS}")
 # 导入自定义的头文件
 include_directories("${header_dirs}")
 
-# 添加编译flag
-add_compile_options("${compile_flags}")
-
 add_library("${lib_name}" SHARED "${src}")
+# 添加编译选项与链接选项
+target_compile_options("${lib_name}" PRIVATE "${compile_flags}")
+set_target_properties("${lib_name}" PROPERTIES LINK_FLAGS "${link_flags}")
+
 target_link_libraries("${lib_name}" "${TORCH_LIBRARIES}")
-set_property(TARGET "${lib_name}" PROPERTY CXX_STANDARD 14)
 install(TARGETS "${lib_name}" DESTINATION .)

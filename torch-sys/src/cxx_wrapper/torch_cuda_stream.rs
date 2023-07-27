@@ -102,16 +102,16 @@ mod cuda_stream_tests {
     #[test]
     fn init_stream() {
         // 测试从池中获得stream的相关函数
-        let stream1 = ffi::get_default_cuda_stream(1).unwrap();
-        let stream2 = ffi::get_default_cuda_stream(1).unwrap();
+        let stream1 = ffi::get_default_cuda_stream(0).unwrap();
+        let stream2 = ffi::get_default_cuda_stream(0).unwrap();
         // 由于都是default stream,两者相同
         assert!(stream1.as_ref().unwrap() == stream2.as_ref().unwrap());
 
-        let stream3 = ffi::get_current_cuda_stream(1).unwrap();
+        let stream3 = ffi::get_current_cuda_stream(0).unwrap();
         // 默认情况下,current stream即default stream
         assert!(stream1.as_ref().unwrap() == stream3.as_ref().unwrap());
 
-        let stream4 = ffi::get_stream_from_pool(true, 1).unwrap();
+        let stream4 = ffi::get_stream_from_pool(true, 0).unwrap();
         // 从high_priority pool中获得的stream与default stream不同
         assert!(stream1.as_ref().unwrap() != stream4.as_ref().unwrap());
     }

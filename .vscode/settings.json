@@ -1,5 +1,5 @@
 {
-    "cmake.sourceDirectory": "${workspaceFolder}/torch-sys/libtch",
+    "cmake.sourceDirectory": "/root/tch-rs/torch-sys/libtch",
     "cmake.buildDirectory": "${workspaceFolder}/torch-sys/libtch/cmake-build-debug",
     "rust-analyzer.cargo.extraEnv": {
         // 使用python版本编译好的libtorch

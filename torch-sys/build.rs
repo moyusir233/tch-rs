@@ -68,17 +68,15 @@ struct SystemInfo {
 struct TchCmakeBuilder {
     // 编译选项
     compile_flags: Vec<String>,
+    // 链接选项
+    link_flags: Vec<String>,
     // 头文件目录
     header_dirs: Vec<PathBuf>,
     // 源文件
     src: Vec<PathBuf>,
     // cuda头文件目录
     cuda_include_dirs: Vec<PathBuf>,
-    // libtorch头文件目录
-    // torch_include_dirs: Vec<PathBuf>,
-    // libtroch库目录
-    // torch_libraries: Vec<PathBuf>,
-    // libtorch cmake文件的目录
+    // libtorch cmake文件的目录,用于cmake的find_package命令
     torch_cmake_dir: PathBuf,
 }
 
@@ -227,6 +225,9 @@ impl TchCmakeBuilder {
         cmake_config.define("CARGO_CXX_LIB_NAME", lib_name);
         // 设置编译选项
         cmake_config.define("CARGO_CXX_COMPILE_FLAGS", self.compile_flags.join(CMAKE_LIST_SPLIT));
+        // 设置链接选项
+        cmake_config.define("CARGO_CXX_LINK_FLAGS", self.link_flags.join(CMAKE_LIST_SPLIT));
+
         // 设置头文件目录
         cmake_config
             .define("CARGO_CXX_INCLUDE_DIRS", join_pathbufs(&self.header_dirs, CMAKE_LIST_SPLIT));
@@ -242,15 +243,6 @@ impl TchCmakeBuilder {
         }
         // 设置libtorch cmake文件的目录
         cmake_config.define("CARGO_TORCH_DIR", &self.torch_cmake_dir);
-        // 设置libtorch的头文件目录与库文件
-        // cmake_config.define(
-        //     "CARGO_TORCH_INCLUDE_DIRS",
-        //     join_pathbufs(&self.torch_include_dirs, CMAKE_LIST_SPLIT),
-        // );
-        // cmake_config.define(
-        //     "CARGO_TORCH_LIBRARIES",
-        //     join_pathbufs(&self.torch_libraries, CMAKE_LIST_SPLIT),
-        // );
     }
 
     fn build(&self, cmake_file_dir: PathBuf, lib_name: &str, use_cuda: bool, use_hip: bool) {
@@ -535,7 +527,6 @@ impl SystemInfo {
         } else {
             "src/fake_cuda_dependency.cpp"
         };
-
         let mut c_files: Vec<PathBuf> = vec![
             "src/torch_api_generated.cpp".into(),
             "src/torch_api.cpp".into(),
@@ -604,19 +595,16 @@ impl SystemInfo {
                     "-fPIC".into(),
                     "-std=c++14".into(),
                     format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi),
-                    // 搜索链接库的目录
-                    format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()),
                 ]);
+                // 链接选项
+                cmake_builder
+                    .link_flags
+                    .extend([format!("-Wl,-rpath={}", self.libtorch_lib_dir.display())]);
                 // torch cmake文件目录
                 cmake_builder.torch_cmake_dir =
                     self.libtorch_lib_dir.parent().unwrap().join("share/cmake/Torch");
-                // torch头文件目录
-                // cmake_builder.torch_include_dirs.extend(self.libtorch_include_dirs.iter().cloned());
-                // torch库文件
-                // cmake_builder.torch_libraries.extend(get_all_file_path(&self.libtorch_lib_dir));
                 // cuda头文件目录,使用conda安装的cuda
-                // TODO 引入相关环境变量
-                cmake_builder.cuda_include_dirs.push("/opt/conda/include".into());
+                cmake_builder.cuda_include_dirs.push("/usr/local/cuda/include".into());
                 // 头文件目录
                 cmake_builder.header_dirs.extend(header_dirs);
                 // 源文件
@@ -689,49 +677,49 @@ fn main() -> anyhow::Result<()> {
 
         // println!("cargo:rustc-link-lib=static=tch");
         println!("cargo:rustc-link-lib=tch");
-        if use_cuda {
-            system_info.link("torch_cuda")
-        }
-        if use_cuda_cu {
-            system_info.link("torch_cuda_cu")
-        }
-        if use_cuda_cpp {
-            system_info.link("torch_cuda_cpp")
-        }
-        if use_hip {
-            system_info.link("torch_hip")
-        }
-        if cfg!(feature = "python-extension") {
-            system_info.link("torch_python")
-        }
-        if system_info.link_type == LinkType::Static {
-            // TODO: this has only be tried out on the cpu version. Check that it works
-            // with cuda too and maybe just try linking all available files?
-            system_info.link("asmjit");
-            system_info.link("clog");
-            system_info.link("cpuinfo");
-            system_info.link("dnnl");
-            system_info.link("dnnl_graph");
-            system_info.link("fbgemm");
-            system_info.link("gloo");
-            system_info.link("kineto");
-            system_info.link("nnpack");
-            system_info.link("onnx");
-            system_info.link("onnx_proto");
-            system_info.link("protobuf");
-            system_info.link("pthreadpool");
-            system_info.link("pytorch_qnnpack");
-            system_info.link("sleef");
-            system_info.link("tensorpipe");
-            system_info.link("tensorpipe_uv");
-            system_info.link("XNNPACK");
-        }
-        system_info.link("torch_cpu");
-        system_info.link("torch");
-        system_info.link("c10");
-        if use_hip {
-            system_info.link("c10_hip");
-        }
+        // if use_cuda {
+        //     system_info.link("torch_cuda")
+        // }
+        // if use_cuda_cu {
+        //     system_info.link("torch_cuda_cu")
+        // }
+        // if use_cuda_cpp {
+        //     system_info.link("torch_cuda_cpp")
+        // }
+        // if use_hip {
+        //     system_info.link("torch_hip")
+        // }
+        // if cfg!(feature = "python-extension") {
+        //     system_info.link("torch_python")
+        // }
+        // if system_info.link_type == LinkType::Static {
+        //     // TODO: this has only be tried out on the cpu version. Check that it works
+        //     // with cuda too and maybe just try linking all available files?
+        //     system_info.link("asmjit");
+        //     system_info.link("clog");
+        //     system_info.link("cpuinfo");
+        //     system_info.link("dnnl");
+        //     system_info.link("dnnl_graph");
+        //     system_info.link("fbgemm");
+        //     system_info.link("gloo");
+        //     system_info.link("kineto");
+        //     system_info.link("nnpack");
+        //     system_info.link("onnx");
+        //     system_info.link("onnx_proto");
+        //     system_info.link("protobuf");
+        //     system_info.link("pthreadpool");
+        //     system_info.link("pytorch_qnnpack");
+        //     system_info.link("sleef");
+        //     system_info.link("tensorpipe");
+        //     system_info.link("tensorpipe_uv");
+        //     system_info.link("XNNPACK");
+        // }
+        // system_info.link("torch_cpu");
+        // system_info.link("torch");
+        // system_info.link("c10");
+        // if use_hip {
+        //     system_info.link("c10_hip");
+        // }
 
         let target = env::var("TARGET").context("TARGET variable not set")?;
 
