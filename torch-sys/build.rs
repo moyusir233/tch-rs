@@ -75,9 +75,11 @@ struct TchCmakeBuilder {
     // cuda头文件目录
     cuda_include_dirs: Vec<PathBuf>,
     // libtorch头文件目录
-    torch_include_dirs: Vec<PathBuf>,
+    // torch_include_dirs: Vec<PathBuf>,
     // libtroch库目录
-    torch_libraries: Vec<PathBuf>,
+    // torch_libraries: Vec<PathBuf>,
+    // libtorch cmake文件的目录
+    torch_cmake_dir: PathBuf,
 }
 
 #[cfg(feature = "ureq")]
@@ -238,15 +240,17 @@ impl TchCmakeBuilder {
                 join_pathbufs(&self.cuda_include_dirs, CMAKE_LIST_SPLIT),
             );
         }
-        // 设置libtorch的头文件目录与库文件目录
-        cmake_config.define(
-            "CARGO_TORCH_INCLUDE_DIRS",
-            join_pathbufs(&self.torch_include_dirs, CMAKE_LIST_SPLIT),
-        );
-        cmake_config.define(
-            "CARGO_TORCH_LIBRARIES",
-            join_pathbufs(&self.torch_libraries, CMAKE_LIST_SPLIT),
-        );
+        // 设置libtorch cmake文件的目录
+        cmake_config.define("CARGO_TORCH_DIR", &self.torch_cmake_dir);
+        // 设置libtorch的头文件目录与库文件
+        // cmake_config.define(
+        //     "CARGO_TORCH_INCLUDE_DIRS",
+        //     join_pathbufs(&self.torch_include_dirs, CMAKE_LIST_SPLIT),
+        // );
+        // cmake_config.define(
+        //     "CARGO_TORCH_LIBRARIES",
+        //     join_pathbufs(&self.torch_libraries, CMAKE_LIST_SPLIT),
+        // );
     }
 
     fn build(&self, cmake_file_dir: PathBuf, lib_name: &str, use_cuda: bool, use_hip: bool) {
@@ -257,6 +261,7 @@ impl TchCmakeBuilder {
         dst.try_exists().expect("failed to cmake build");
         println!("cargo:rustc-link-search=native={}", dst.display());
 
+        println!("cargo:rerun-if-changed=libtch/CMakeLists.txt");
         self.header_dirs
             .iter()
             .flat_map(get_all_file_path)
@@ -455,7 +460,7 @@ impl SystemInfo {
     }
 
     #[allow(dead_code)]
-    fn make(&self, use_cuda: bool, use_hip: bool) {
+    fn make(&self, lib_name: &str, use_cuda: bool, use_hip: bool) {
         let cuda_dependency = if use_cuda || use_hip {
             "libtch/src/dummy_cuda_dependency.cpp"
         } else {
@@ -493,7 +498,7 @@ impl SystemInfo {
                     .flag("-std=c++14")
                     .flag(&format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi))
                     .files(&c_files)
-                    .compile("tch");
+                    .compile(lib_name);
             }
             Os::Windows => {
                 // TODO: Pass "/link" "LIBPATH:{}" to cl.exe in order to emulate rpath.
@@ -512,7 +517,7 @@ impl SystemInfo {
 
     // 利用cmake编译封装libtorch的代码,包括cxx生成的相关源文件
     #[allow(dead_code)]
-    fn cmake(&self, use_cuda: bool, use_hip: bool) {
+    fn cmake(&self, lib_name: &str, use_cuda: bool, use_hip: bool) {
         let mut cmake_builder = TchCmakeBuilder::default();
         let current_dir: PathBuf = env_var_rerun("CARGO_MANIFEST_DIR")
             .context("failed to get `CARGO_MANIFEST_DIR`")
@@ -524,15 +529,18 @@ impl SystemInfo {
         let cxx_rs_dir = "src/cxx_wrapper";
         let _ = cxx_build::bridges(get_all_file_path(cxx_rs_dir));
 
+        // 源文件,此处的路径是相对于CMakeList.txt的父目录的相对路径
         let cuda_dependency = if use_cuda || use_hip {
             "src/dummy_cuda_dependency.cpp"
         } else {
             "src/fake_cuda_dependency.cpp"
         };
 
-        // 源文件
-        let mut c_files: Vec<PathBuf> =
-            vec!["src/torch_api_generated.cpp".into(), cuda_dependency.into()];
+        let mut c_files: Vec<PathBuf> = vec![
+            "src/torch_api_generated.cpp".into(),
+            "src/torch_api.cpp".into(),
+            cuda_dependency.into(),
+        ];
         if cfg!(feature = "python-extension") {
             c_files.push("src/torch_python.cpp".into())
         }
@@ -596,11 +604,16 @@ impl SystemInfo {
                     "-fPIC".into(),
                     "-std=c++14".into(),
                     format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi),
+                    // 搜索链接库的目录
+                    format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()),
                 ]);
+                // torch cmake文件目录
+                cmake_builder.torch_cmake_dir =
+                    self.libtorch_lib_dir.parent().unwrap().join("share/cmake/Torch");
                 // torch头文件目录
-                cmake_builder.torch_include_dirs.extend(self.libtorch_include_dirs.iter().cloned());
-                // torch库文件目录
-                cmake_builder.torch_libraries.push(self.libtorch_lib_dir.clone());
+                // cmake_builder.torch_include_dirs.extend(self.libtorch_include_dirs.iter().cloned());
+                // torch库文件
+                // cmake_builder.torch_libraries.extend(get_all_file_path(&self.libtorch_lib_dir));
                 // cuda头文件目录,使用conda安装的cuda
                 // TODO 引入相关环境变量
                 cmake_builder.cuda_include_dirs.push("/opt/conda/include".into());
@@ -609,7 +622,7 @@ impl SystemInfo {
                 // 源文件
                 cmake_builder.src.extend(c_files);
                 // 进行编译
-                cmake_builder.build(cmake_file_dir, "tch", use_cuda, use_hip);
+                cmake_builder.build(cmake_file_dir, lib_name, use_cuda, use_hip);
             }
             Os::Windows => {
                 // TODO: Pass "/link" "LIBPATH:{}" to cl.exe in order to emulate rpath.
@@ -671,7 +684,8 @@ fn main() -> anyhow::Result<()> {
             si_lib.join("libtorch_hip.so").exists() || si_lib.join("torch_hip.dll").exists();
         println!("cargo:rustc-link-search=native={}", si_lib.display());
 
-        system_info.cmake(use_cuda, use_hip);
+        system_info.cmake("tch", use_cuda, use_hip);
+        // system_info.make("tch", use_cuda, use_hip);
 
         // println!("cargo:rustc-link-lib=static=tch");
         println!("cargo:rustc-link-lib=tch");
