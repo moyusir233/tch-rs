@@ -1,5 +1,5 @@
 #[allow(unused)]
-use crate::torch_cuda_event::CUDAEvent;
+use crate::cxx_wrapper::torch_cuda_event::CUDAEvent;
 use cxx::UniquePtr;
 pub use ffi::CUDAStream;
 /// 利用cxx定义的pytorch底层使用的cuda stream

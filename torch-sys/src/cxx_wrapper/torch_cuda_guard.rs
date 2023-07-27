@@ -1,4 +1,4 @@
-use crate::torch_cuda_stream::ffi::CUDAStream;
+use crate::cxx_wrapper::torch_cuda_stream::ffi::CUDAStream;
 use cxx::UniquePtr;
 use std::pin::Pin;
 
@@ -63,7 +63,7 @@ pub mod ffi {
         /// 不过切换current stream时也会将current device设置为传入stream所在的device
         pub type CUDAStreamGuard;
         #[namespace = "c10::cuda"]
-        type CUDAStream = crate::torch_cuda_stream::ffi::CUDAStream;
+        type CUDAStream = crate::cxx_wrapper::torch_cuda_stream::ffi::CUDAStream;
 
         fn new_cuda_stream_guard(stream: &CUDAStream) -> UniquePtr<CUDAStreamGuard>;
 

@@ -17,7 +17,7 @@ pub mod ffi {
         pub type CUDAEvent;
         /// 代表着`c10::cuda::CUDAStream`,详细可见c10/cuda/CUDAStream.h
         #[namespace = "c10::cuda"]
-        type CUDAStream = crate::torch_cuda_stream::ffi::CUDAStream;
+        type CUDAStream = crate::cxx_wrapper::torch_cuda_stream::ffi::CUDAStream;
 
         /// 使用默认的配置创建cuda event(默认启用cudaEventDisableTiming flag),
         fn new_cuda_event() -> UniquePtr<CUDAEvent>;
