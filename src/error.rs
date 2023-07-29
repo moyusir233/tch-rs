@@ -5,6 +5,7 @@ use std::num::ParseIntError;
 use thiserror::Error;
 use zip::result::ZipError;
 
+pub type TchResult<T> = Result<T, TchError>;
 /// Main library error type.
 #[derive(Error, Debug)]
 pub enum TchError {
@@ -62,6 +63,10 @@ pub enum TchError {
     /// Errors returned by the safetensors library.
     #[error("safetensors error {path}: {err}")]
     SafeTensorError { path: String, err: safetensors::SafeTensorError },
+
+    /// Cxx internal error
+    #[error(transparent)]
+    Cxx(#[from] cxx::Exception),
 }
 
 impl TchError {

@@ -6,6 +6,7 @@ pub use utils::{
     set_num_threads, QEngine,
 };
 
+pub mod cxx_wrapper;
 pub(crate) mod device;
 pub(crate) mod image;
 pub mod jit;

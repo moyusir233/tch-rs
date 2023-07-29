@@ -231,10 +231,11 @@ impl SourceFileManager {
             cuda_dependency.into(),
         ]);
         if cfg!(feature = "python-extension") {
-            src.push("src/torch_python.cpp".into())
+            src.push("src/torch_python.cpp".into());
+            // 默认使用conda安装的python的头文件目录(编写python插件的cxx源文件需要相关头文件)
+            header_dirs.push("/opt/conda/include/python3.10".into());
         }
 
-        // 头文件目录
         header_dirs.push("include".into());
 
         // 补全头文件目录与源文件的路径

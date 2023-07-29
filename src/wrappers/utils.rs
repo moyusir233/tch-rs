@@ -2,6 +2,8 @@ use crate::TchError;
 use libc::c_char;
 use std::io;
 
+pub use torch_sys::cxx_wrapper::torch_utils::*;
+
 // This returns None on the null pointer. If not null, the pointer gets
 // freed.
 pub(super) unsafe fn ptr_to_string(ptr: *mut c_char) -> Option<String> {

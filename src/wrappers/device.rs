@@ -117,4 +117,8 @@ impl Device {
             Device::Cpu | Device::Mps | Device::Vulkan => false,
         }
     }
+
+    pub fn index(&self) -> i64 {
+        self.c_int() as i64
+    }
 }

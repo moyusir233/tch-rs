@@ -210,7 +210,24 @@ impl ffi::OptionalCUDAStreamGuard {
 }
 
 impl ffi::CUDAMultiStreamGuard {
+    // TODO 改善接口
     pub fn new(streams: &[CUDAStream]) -> UniquePtr<Self> {
         unsafe { ffi::new_cuda_multi_stream_guard(streams.as_ptr(), streams.len()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init() {
+        let device = -1;
+        let _cuda_guard = CUDAGuard::new(device);
+        let _optional_cuda_guard = OptionalCUDAGuard::new(device);
+        let cuda_stream =
+            CUDAStream::get_default_cuda_stream(device).expect("failed to create cuda stream");
+        let _cuda_stream_gurad = CUDAStreamGuard::new(&cuda_stream);
+        let _optional_cuda_stream_gurad = OptionalCUDAStreamGuard::new(&cuda_stream);
     }
 }

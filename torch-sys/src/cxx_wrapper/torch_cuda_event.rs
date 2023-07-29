@@ -53,7 +53,7 @@ pub mod ffi {
         /// 令指定的cuda stream等待当前cuda event上所记录的cuda操作执行完毕
         fn block(self: Pin<&mut CUDAEvent>, stream: &CUDAStream) -> Result<()>;
 
-        /// 返回两个event之间记录的时间差
+        /// 返回两个event之间记录的时间差,单位ms
         fn elapsed_time(self: &CUDAEvent, other: &CUDAEvent) -> Result<f32>;
 
         /// 等待一个事件执行完毕
