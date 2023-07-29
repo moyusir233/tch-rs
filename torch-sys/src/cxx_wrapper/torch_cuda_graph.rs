@@ -2,7 +2,6 @@ use cxx::UniquePtr;
 use std::pin::Pin;
 
 pub use ffi::{CUDAGraph, MemPoolId};
-unsafe impl Send for ffi::CUDAGraph {}
 
 /// 利用cxx定义的pytorch底层使用的cuda graph
 #[cxx::bridge]
