@@ -26,10 +26,7 @@
 				"go2sh.cmake-integration-vscode",
 				"albert.TabOut",
 				"redjue.git-commit-plugin",
-				"Gruntfuggly.todo-tree",
-				"ms-python.vscode-pylance",
-				"ms-python.python",
-				"vsls-contrib.codetour"
+				"Gruntfuggly.todo-tree"
 			]
 		}
 	}
