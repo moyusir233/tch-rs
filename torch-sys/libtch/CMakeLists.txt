@@ -29,7 +29,7 @@ else()
     # 默认链接选项
     set(link_flags "-Wl,-rpath=${CONDA_TORCH_DIR}/lib")
     # 默认为include、cxx-wrapper目录以及cxx头文件目录
-    set(CARGO_OUT_DIR "$ENV{HOME}/tch-rs/target" )
+    set(CARGO_OUT_DIR "/workspaces/tch-rs/target" )
     set(header_dirs 
             "${CMAKE_SOURCE_DIR}/include" 
             "${CMAKE_SOURCE_DIR}/include/cxx-wrapper"
