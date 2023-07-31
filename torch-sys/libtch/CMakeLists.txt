@@ -37,6 +37,8 @@ else()
             "${CARGO_OUT_DIR}/cxxbridge/rust"
             # 默认使用conda安装的python的头文件目录(编写python插件的cxx源文件需要相关头文件)
             "/opt/conda/include/python3.10"
+            # c10d命名空间相关的头文件
+            "${CONDA_TORCH_DIR}/include/torch/csrc/distributed/c10d"
     )
 
     # 默认为src目录下的所有文件以及cargo OUT_DIR目录下的cxx源文件
@@ -63,6 +65,7 @@ find_package(Torch REQUIRED)
 if (DEFINED USE_CUDA)
     include_directories("${CUDA_INCLUDE_DIRS}")
 endif()
+message("include dirs:${TORCH_INCLUDE_DIRS}")
 include_directories("${TORCH_INCLUDE_DIRS}")
 
 # 导入自定义的头文件

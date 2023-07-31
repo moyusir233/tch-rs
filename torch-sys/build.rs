@@ -294,6 +294,16 @@ impl SourceFileManager {
             out_dir.join("cxxbridge/include/rust"),
         ]);
     }
+    // 由于需要使用torch.cmake没有提供分布式训练相关的头文件目录(c10d),
+    // 由该函数进行添加
+    fn add_extra_libtorch_header_dirs(
+        &self,
+        header_dirs: &mut Vec<PathBuf>,
+        libtorch_src_dir: impl AsRef<Path>,
+    ) {
+        // 添加c10d相关的头文件目录
+        header_dirs.push(libtorch_src_dir.as_ref().join("include/torch/csrc/distributed/c10d"));
+    }
 }
 
 impl TchCmakeBuilder {
@@ -602,7 +612,11 @@ impl SystemInfo {
     // 利用cmake编译封装libtorch的代码,包括cxx生成的相关源文件
     #[allow(dead_code)]
     fn cmake(&self, lib_name: &str, use_cuda: bool, use_hip: bool) {
-        let libtch_project_dir = PathBuf::from(
+        // libtorch的源码目录
+        let libtorch_src_dir =
+            self.libtorch_lib_dir.parent().context("failed to find the libtorch src dir").unwrap();
+        // 关于libtorch的rust binding的目录,即torch-sys/libtch
+        let libtorch_binding_dir = PathBuf::from(
             env_var_rerun("CARGO_MANIFEST_DIR")
                 .context("failed to get `CARGO_MANIFEST_DIR`")
                 .unwrap(),
@@ -610,11 +624,14 @@ impl SystemInfo {
         .join("libtch");
         // 用于生成cxx相关的源文件的rs代码的相对目录
         let cxx_rs_relative_dir = "src/cxx_wrapper";
+
         // 生成cxx相关的源文件
-        let _ = cxx_build::bridges(get_all_file_path(cxx_rs_relative_dir));
+        let _ = cxx_build::bridges(
+            get_all_file_path(cxx_rs_relative_dir).into_iter(), // .filter(|path| !path.ends_with("torch_comm_process_group.rs")),
+        );
 
         let source_file_manager =
-            SourceFileManager { libtch_project_dir: libtch_project_dir.clone() };
+            SourceFileManager { libtch_project_dir: libtorch_binding_dir.clone() };
         let (mut src, mut header_dirs) = (vec![], vec![]);
 
         source_file_manager.add_basic_src_and_header_dirs(
@@ -628,6 +645,7 @@ impl SystemInfo {
             &mut header_dirs,
             cxx_rs_relative_dir,
         );
+        source_file_manager.add_extra_libtorch_header_dirs(&mut header_dirs, libtorch_src_dir);
 
         match self.os {
             Os::Linux | Os::Macos => {
@@ -649,12 +667,7 @@ impl SystemInfo {
                     // 指定搜索动态库的目录
                     .push(format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()));
                 // torch cmake文件目录
-                cmake_builder.torch_cmake_dir = self
-                    .libtorch_lib_dir
-                    .parent()
-                    .context("failed to find the libtorch_lib_dir's parent")
-                    .unwrap()
-                    .join("share/cmake/Torch");
+                cmake_builder.torch_cmake_dir = libtorch_src_dir.join("share/cmake/Torch");
                 // cuda头文件目录,使用本地环境的cuda
                 // TODO 添加相关的环境变量?
                 cmake_builder.cuda_include_dirs.push("/usr/local/cuda/include".into());
@@ -663,7 +676,7 @@ impl SystemInfo {
                 // 源文件
                 cmake_builder.src.extend(src);
                 // 进行编译
-                cmake_builder.build(libtch_project_dir, lib_name, use_cuda, use_hip);
+                cmake_builder.build(libtorch_binding_dir, lib_name, use_cuda, use_hip);
             }
             Os::Windows => unimplemented!(),
         };
