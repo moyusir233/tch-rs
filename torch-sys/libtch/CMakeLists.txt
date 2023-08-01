@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 project(tch)
 
+# 设置c++标准
+set(CMAKE_CXX_STANDARD 14)
+
+# 关闭警告
+add_definitions(-w)
+
 if (DEFINED CARGO_BUILD)
     # 库名称
     set(lib_name "${CARGO_CXX_LIB_NAME}")
@@ -16,10 +22,10 @@ if (DEFINED CARGO_BUILD)
     if (DEFINED CARGO_USE_CUDA)
         set(USE_CUDA "")
         set(CUDA_INCLUDE_DIRS "${CARGO_CUDA_INCLUDE_DIRS}")
-    endif()
+    endif ()
     # libtorch cmake文件目录
     set(Torch_DIR "${CARGO_TORCH_DIR}")
-else()
+else ()
     set(lib_name "tch")
     # 默认使用conda安装的Torch库
     set(CONDA_TORCH_DIR "/opt/conda/lib/python3.10/site-packages/torch")
@@ -29,14 +35,14 @@ else()
     # 默认链接选项
     set(link_flags "-Wl,-rpath=${CONDA_TORCH_DIR}/lib")
     # 默认为include、cxx-wrapper目录以及cxx头文件目录
-    set(CARGO_OUT_DIR "/workspaces/tch-rs/target" )
-    set(header_dirs 
-            "${CMAKE_SOURCE_DIR}/include" 
+    set(CARGO_OUT_DIR "/workspaces/tch-rs/target")
+    set(header_dirs
+            "${CMAKE_SOURCE_DIR}/include"
             "${CMAKE_SOURCE_DIR}/include/cxx-wrapper"
             "${CARGO_OUT_DIR}/cxxbridge/torch-sys/src/cxx_wrapper"
             "${CARGO_OUT_DIR}/cxxbridge/rust"
             # 默认使用conda安装的python的头文件目录(编写python插件的cxx源文件需要相关头文件)
-            "/opt/conda/include/python3.10"
+            #            "/opt/conda/include/python3.10"
             # c10d命名空间相关的头文件
             "${CONDA_TORCH_DIR}/include/torch/csrc/distributed/c10d"
     )
@@ -45,11 +51,15 @@ else()
     file(GLOB_RECURSE src "${CMAKE_SOURCE_DIR}/src/*" "${CARGO_OUT_DIR}/cxxbridge/torch-sys/src/cxx_wrapper/*.cc")
     # 过滤掉fake的cuda文件
     list(FILTER src EXCLUDE REGEX ".*fake_cuda_dependency.cpp$")
+    list(FILTER src EXCLUDE REGEX ".*torch_python.cpp$")
 
     # 默认启用cuda,且使用本地的cuda头文件
     set(USE_CUDA "")
     set(CUDA_INCLUDE_DIRS "/usr/local/cuda")
-endif()
+
+    # 默认开启测试
+    set(CARGO_TEST "")
+endif ()
 
 # Finds the Torch library
 #
@@ -64,7 +74,7 @@ find_package(Torch REQUIRED)
 # 导入pytorch和cuda相关的头文件
 if (DEFINED USE_CUDA)
     include_directories("${CUDA_INCLUDE_DIRS}")
-endif()
+endif ()
 message("include dirs:${TORCH_INCLUDE_DIRS}")
 include_directories("${TORCH_INCLUDE_DIRS}")
 
@@ -73,7 +83,7 @@ include_directories("${header_dirs}")
 
 add_library("${lib_name}" SHARED "${src}")
 # 添加编译选项与链接选项
-target_compile_options("${lib_name}" PRIVATE "${compile_flags}")
+target_compile_options("${lib_name}" PUBLIC "${compile_flags}")
 set_target_properties("${lib_name}" PROPERTIES LINK_FLAGS "${link_flags}")
 
 target_link_libraries("${lib_name}" "${TORCH_LIBRARIES}")

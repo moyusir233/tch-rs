@@ -13,7 +13,7 @@ categories = ["external-ffi-bindings", "science"]
 license = "MIT/Apache-2.0"
 
 [dependencies]
-cxx = "1.0.102"
+cxx = { version = "1.0.102", features = ["c++14"] }
 libc = "0.2.0"
 
 [build-dependencies]
@@ -33,4 +33,4 @@ doc-only = []
 python-extension = []
 
 [package.metadata.docs.rs]
-features = [ "doc-only" ]
+features = ["doc-only"]
