@@ -3,7 +3,6 @@ use std::ffi::CString;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::IntListOption;
 pub use ffi::{PrefixStore, TCPStore, TCPStoreOptions};
 
 /// 定义实例化进程组时所需要的一系列kv store,可见文档:
@@ -57,6 +56,7 @@ pub mod ffi {
     }
 }
 
+#[inline]
 fn cstring_from_string(s: String) -> CString {
     CString::new(s).unwrap()
 }
@@ -75,7 +75,7 @@ impl TCPStoreOptions {
         is_server: bool,
         num_workers: usize,
         wait_workers: bool,
-        timeout: i64,
+        timeout: Duration,
         multi_tenant: bool,
     ) -> UniquePtr<Self> {
         ffi::new_tcp_store_options(
@@ -83,7 +83,7 @@ impl TCPStoreOptions {
             is_server,
             num_workers,
             wait_workers,
-            timeout,
+            timeout.as_millis() as i64,
             multi_tenant,
         )
     }
@@ -91,9 +91,7 @@ impl TCPStoreOptions {
 
 impl TCPStore {
     pub fn new(host: String, opts: &TCPStoreOptions) -> UniquePtr<Self> {
-        let tcp_store =
-            unsafe { ffi::new_tcp_store(cstring_from_string(host).as_ptr(), opts) };
-        tcp_store
+        unsafe { ffi::new_tcp_store(cstring_from_string(host).as_ptr(), opts) }
     }
 }
 
@@ -117,9 +115,7 @@ impl NestPrefixStore<PrefixStore> for PrefixStore {
 
 impl NestPrefixStore<TCPStore> for PrefixStore {
     fn nest_store(prefix: String, store: UniquePtr<TCPStore>) -> UniquePtr<PrefixStore> {
-        unsafe {
-            ffi::new_prefix_store_with_tcp_store(cstring_from_string(prefix).as_ptr(), store)
-        }
+        unsafe { ffi::new_prefix_store_with_tcp_store(cstring_from_string(prefix).as_ptr(), store) }
     }
 }
 
@@ -132,16 +128,20 @@ mod tests {
     fn store() {
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let host = String::from("localhost");
+
         std::thread::spawn({
             let barrier = barrier.clone();
             let host = host.clone();
             move || {
-                let tcp_store_opts = TCPStoreOptions::new(8080, false, 2, true, 10000, false);
-                let tcp_store = TCPStore::new(host, &tcp_store_opts);
+                let tcp_store_opts =
+                    TCPStoreOptions::new(8080, false, 2, true, Duration::from_secs(10), false);
+                let _tcp_store = TCPStore::new(host, &tcp_store_opts);
                 barrier.wait();
             }
         });
-        let tcp_store_opts = TCPStoreOptions::new(8080, true, 2, true, 10000, true);
+
+        let tcp_store_opts =
+            TCPStoreOptions::new(8080, true, 2, true, Duration::from_secs(10), true);
         let mut tcp_store = TCPStore::new(host, &tcp_store_opts);
         barrier.wait();
 
