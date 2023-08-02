@@ -5,31 +5,21 @@
 #include <torch/csrc/distributed/c10d/PrefixStore.hpp>
 #include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
 #include <torch/csrc/distributed/c10d/Backend.hpp>
+#include "torch_comm_store.rs.h"
+#include "torch_comm_process_group.rs.h"
 
 #include <memory>
 
 namespace c10d {
-    struct ProcessGroupNCCLOptions : ProcessGroupNCCL::Options {
-        explicit ProcessGroupNCCLOptions(
-                std::int64_t timeout,
-                bool is_high_priority_stream
-        ) : ProcessGroupNCCL::Options(is_high_priority_stream) {
-            this->timeout = std::chrono::milliseconds(timeout);
-        }
-    };
-
-    std::unique_ptr<TCPStoreOptions> new_tcp_store_options(
-            std::uint16_t port,
-            bool is_server,
-            std::size_t num_workers,
-            bool wait_workers,
-            std::int64_t timeout,
-            bool multi_tenant
+    c10::intrusive_ptr<ProcessGroupNCCL::Options> from_nccl_options(
+            ProcessGroupNCCLOptions &opts
     );
+
+    TCPStoreOptions from_my_tcp_store_options(const MyTCPStoreOptions &opts);
 
     std::unique_ptr<TCPStore> new_tcp_store(
             const char *host,
-            const TCPStoreOptions &opts);
+            const MyTCPStoreOptions &opts);
 
     void set_tcp_store_timeout(TCPStore &tcp_store, std::int64_t timeout);
 
@@ -41,21 +31,17 @@ namespace c10d {
 
     void set_prefix_store_timeout(PrefixStore &prefix_store, std::int64_t timeout);
 
-    std::unique_ptr<ProcessGroupNCCLOptions> new_process_group_nccl_options(
-            std::int64_t timeout,
-            bool is_high_priority_stream);
-
     std::unique_ptr<ProcessGroupNCCL> new_process_group_nccl_with_tcp_store(
             std::unique_ptr<TCPStore> store,
             std::int32_t rank,
             std::int32_t size,
-            std::unique_ptr<ProcessGroupNCCLOptions> options);
+            ProcessGroupNCCLOptions options);
 
     std::unique_ptr<ProcessGroupNCCL> new_process_group_nccl_with_prefix_store(
             std::unique_ptr<PrefixStore> store,
             std::int32_t rank,
             std::int32_t size,
-            std::unique_ptr<ProcessGroupNCCLOptions> options);
+            ProcessGroupNCCLOptions options);
 }
 
 #endif // TCH_TORCH_PROCESS_GROUP_NCCL_H

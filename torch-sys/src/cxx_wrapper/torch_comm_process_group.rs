@@ -9,30 +9,30 @@ pub use ffi::{ProcessGroupNCCL, ProcessGroupNCCLOptions};
 #[cxx::bridge]
 pub mod ffi {
 
+    /// 表示`c10d::ProcessGroupNCCL::Options`,详见torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp
+    #[namespace = "c10d"]
+    #[derive(Clone)]
+    pub struct ProcessGroupNCCLOptions {
+        timeout: i64,
+        is_high_priority_stream: bool,
+    }
+
     #[namespace = "c10d"]
     unsafe extern "C++" {
         include!("torch_comm_process_group.h");
 
         /// 表示`c10d::ProcessGroupNCCL`,详见torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp
         pub type ProcessGroupNCCL;
-        /// 表示`c10d::ProcessGroupNCCL::Options`,详见torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp
-        pub type ProcessGroupNCCLOptions;
 
         type PrefixStore = crate::cxx_wrapper::torch_comm_store::ffi::PrefixStore;
         type TCPStore = crate::cxx_wrapper::torch_comm_store::ffi::TCPStore;
-
-        /// 实例化`ProcessGroupNCCLOptions`,用于后续`ProcessGroupNCCL`的创建
-        fn new_process_group_nccl_options(
-            timeout: i64,
-            is_high_priority_stream: bool,
-        ) -> UniquePtr<ProcessGroupNCCLOptions>;
 
         /// 利用`TCPStore`创建`ProcessGroupNCCL`
         fn new_process_group_nccl_with_tcp_store(
             store: UniquePtr<TCPStore>,
             rank: i32,
             size: i32,
-            options: UniquePtr<ProcessGroupNCCLOptions>,
+            options: ProcessGroupNCCLOptions,
         ) -> UniquePtr<ProcessGroupNCCL>;
 
         /// 利用`PrefixStore`创建`ProcessGroupNCCL`
@@ -40,7 +40,7 @@ pub mod ffi {
             store: UniquePtr<PrefixStore>,
             rank: i32,
             size: i32,
-            options: UniquePtr<ProcessGroupNCCLOptions>,
+            options: ProcessGroupNCCLOptions,
         ) -> UniquePtr<ProcessGroupNCCL>;
     }
 }
@@ -50,7 +50,7 @@ pub trait FromStore<S: Store + cxx::memory::UniquePtrTarget> {
         store: UniquePtr<S>,
         rank: i32,
         size: i32,
-        options: UniquePtr<ProcessGroupNCCLOptions>,
+        options: ProcessGroupNCCLOptions,
     ) -> UniquePtr<Self>
     where
         Self: Sized + cxx::memory::UniquePtrTarget;
@@ -61,7 +61,7 @@ impl FromStore<TCPStore> for ProcessGroupNCCL {
         store: UniquePtr<TCPStore>,
         rank: i32,
         size: i32,
-        options: UniquePtr<ProcessGroupNCCLOptions>,
+        options: ProcessGroupNCCLOptions,
     ) -> UniquePtr<Self> {
         ffi::new_process_group_nccl_with_tcp_store(store, rank, size, options)
     }
@@ -72,27 +72,40 @@ impl FromStore<PrefixStore> for ProcessGroupNCCL {
         store: UniquePtr<PrefixStore>,
         rank: i32,
         size: i32,
-        options: UniquePtr<ProcessGroupNCCLOptions>,
+        options: ProcessGroupNCCLOptions,
     ) -> UniquePtr<Self> {
         ffi::new_process_group_nccl_with_prefix_store(store, rank, size, options)
     }
 }
 
 impl ProcessGroupNCCLOptions {
-    pub fn new(timeout: Duration, is_high_priority_stream: bool) -> UniquePtr<Self> {
-        ffi::new_process_group_nccl_options(timeout.as_millis() as i64, is_high_priority_stream)
+    pub fn new(timeout: Duration, is_high_priority_stream: bool) -> Self {
+        Self { timeout: timeout.as_millis() as i64, is_high_priority_stream }
+    }
+}
+
+impl Default for ProcessGroupNCCLOptions {
+    fn default() -> Self {
+        Self { timeout: 30 * 60 * 1000, is_high_priority_stream: false }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cxx_wrapper::torch_comm_store::MyTCPStoreOptions;
     use crate::cxx_wrapper::torch_comm_store::NestPrefixStore;
-    use crate::cxx_wrapper::torch_comm_store::TCPStoreOptions;
 
     #[test]
     fn nccl_process_group() {
-        let tcp_opts = TCPStoreOptions::new(8080, true, 1, true, Duration::from_secs(10), false);
+        let tcp_opts = MyTCPStoreOptions {
+            port: 8081,
+            is_server: true,
+            num_workers: 1,
+            wait_workers: true,
+            timeout: 10000,
+            multi_tenant: false,
+        };
         let tcp_store = TCPStore::new("localhost".into(), &tcp_opts);
 
         {

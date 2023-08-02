@@ -3,12 +3,26 @@ use std::ffi::CString;
 use std::pin::Pin;
 use std::time::Duration;
 
-pub use ffi::{PrefixStore, TCPStore, TCPStoreOptions};
+pub use ffi::{MyTCPStoreOptions, PrefixStore, TCPStore};
 
 /// 定义实例化进程组时所需要的一系列kv store,可见文档:
 /// [pytorch-distributed-kv-store](https://pytorch.org/docs/stable/distributed.html#distributed-key-value-store)
 #[cxx::bridge]
 pub mod ffi {
+
+    /// 表示可以转换为`c10d::TCPStoreOptions`的shared type,
+    /// 详见torch/csrc/distributed/c10d/TCPStore.hpp,
+    /// 其中timout单位为ms
+    #[namespace = "c10d"]
+    #[derive(Clone)]
+    pub struct MyTCPStoreOptions {
+        port: u16,
+        is_server: bool,
+        num_workers: usize,
+        wait_workers: bool,
+        timeout: i64,
+        multi_tenant: bool,
+    }
 
     #[namespace = "c10d"]
     unsafe extern "C++" {
@@ -16,22 +30,12 @@ pub mod ffi {
 
         /// 表示`c10d::TCPStore`,详见torch/csrc/distributed/c10d/TCPStore.hpp
         pub type TCPStore;
-        /// 表示`c10d::TCPStoreOptions`,详见torch/csrc/distributed/c10d/TCPStore.hpp
-        pub type TCPStoreOptions;
-
-        /// 实例化`TCPStoreOptions`,用于后续`TCPStore`的创建
-        fn new_tcp_store_options(
-            port: u16,
-            is_server: bool,
-            num_workers: usize,
-            wait_workers: bool,
-            timeout: i64,
-            multi_tenant: bool,
-        ) -> UniquePtr<TCPStoreOptions>;
 
         /// 创建`TCPStore`,其中host是master节点的主机名
-        unsafe fn new_tcp_store(host: *const c_char, opts: &TCPStoreOptions)
-            -> UniquePtr<TCPStore>;
+        unsafe fn new_tcp_store(
+            host: *const c_char,
+            opts: &MyTCPStoreOptions,
+        ) -> UniquePtr<TCPStore>;
 
         /// 设置操作的超时时间,继承于`c10d::Store`类的需要实现的方法
         fn set_tcp_store_timeout(tcp_store: Pin<&mut TCPStore>, timeout: i64);
@@ -69,28 +73,22 @@ pub trait NestPrefixStore<S: Store + cxx::memory::UniquePtrTarget> {
     fn nest_store(prefix: String, store: UniquePtr<S>) -> UniquePtr<PrefixStore>;
 }
 
-impl TCPStoreOptions {
-    pub fn new(
-        port: u16,
-        is_server: bool,
-        num_workers: usize,
-        wait_workers: bool,
-        timeout: Duration,
-        multi_tenant: bool,
-    ) -> UniquePtr<Self> {
-        ffi::new_tcp_store_options(
-            port,
-            is_server,
-            num_workers,
-            wait_workers,
-            timeout.as_millis() as i64,
-            multi_tenant,
-        )
+impl Default for MyTCPStoreOptions {
+    fn default() -> Self {
+        // 参考torch/csrc/distributed/c10d/TCPStore.hpp所定义的默认值
+        Self {
+            port: 29500,
+            is_server: false,
+            num_workers: 0,
+            wait_workers: true,
+            timeout: 300000,
+            multi_tenant: false,
+        }
     }
 }
 
 impl TCPStore {
-    pub fn new(host: String, opts: &TCPStoreOptions) -> UniquePtr<Self> {
+    pub fn new(host: String, opts: &MyTCPStoreOptions) -> UniquePtr<Self> {
         unsafe { ffi::new_tcp_store(cstring_from_string(host).as_ptr(), opts) }
     }
 }
@@ -133,15 +131,27 @@ mod tests {
             let barrier = barrier.clone();
             let host = host.clone();
             move || {
-                let tcp_store_opts =
-                    TCPStoreOptions::new(8080, false, 2, true, Duration::from_secs(10), false);
+                let tcp_store_opts = MyTCPStoreOptions {
+                    port: 8080,
+                    is_server: false,
+                    num_workers: 2,
+                    wait_workers: true,
+                    timeout: 10000,
+                    multi_tenant: false,
+                };
                 let _tcp_store = TCPStore::new(host, &tcp_store_opts);
                 barrier.wait();
             }
         });
 
-        let tcp_store_opts =
-            TCPStoreOptions::new(8080, true, 2, true, Duration::from_secs(10), true);
+        let tcp_store_opts = MyTCPStoreOptions {
+            port: 8080,
+            is_server: true,
+            num_workers: 2,
+            wait_workers: true,
+            timeout: 10000,
+            multi_tenant: true,
+        };
         let mut tcp_store = TCPStore::new(host, &tcp_store_opts);
         barrier.wait();
 
