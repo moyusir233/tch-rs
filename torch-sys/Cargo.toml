@@ -31,6 +31,7 @@ walkdir = "2.3.3"
 download-libtorch = ["ureq", "serde", "serde_json"]
 doc-only = []
 python-extension = []
+lto = []
 
 [package.metadata.docs.rs]
 features = ["doc-only"]

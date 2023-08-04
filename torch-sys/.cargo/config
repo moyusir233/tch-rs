@@ -1,3 +1,6 @@
-[target.x86_64-unknown-linux-gnu]
-linker = "clang-16"
-rustflags = ["-Clinker-plugin-lto", "-Clink-arg=-fuse-ld=lld-16"]
+[target.'cfg(feature="lto")']
+rustflags = [
+    "-Clto",
+    "-Clinker=clang-16",
+    "-Clinker-plugin-lto",
+    "-Clink-arg=-fuse-ld=lld-16"]

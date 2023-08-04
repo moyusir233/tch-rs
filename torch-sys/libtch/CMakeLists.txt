@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 
-# 使用clang编译以启用rust跨语言的lto
-# (注:这里使用的是clang-10,以编译cuda相关文件,但rust那边是使用的llvm-16即
-# 应对应clang-16,但没有报错)
-set(CMAKE_C_COMPILER "/usr/bin/clang")
-set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
+if (DEFINED CARGO_LTO)
+    # 使用clang编译以启用rust跨语言的lto
+    # (注:这里使用的是clang-10,以编译cuda相关文件,但rust那边是使用的llvm-16即
+    # 应对应clang-16,但没有报错)
+    set(CMAKE_C_COMPILER "/usr/bin/clang")
+    set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
+endif ()
 
 project(tch)
 
@@ -90,11 +92,13 @@ include_directories("${header_dirs}")
 
 add_library("${lib_name}" SHARED "${src}")
 
-# 开启lto所需的编译与链接选项
-list(APPEND compile_flags "-flto=thin")
-list(APPEND compile_flags "-v")
-list(APPEND link_flags "-flto=thin")
-list(APPEND link_flags "-v")
+if (DEFINED CARGO_LTO)
+    # 开启lto所需的编译与链接选项
+    list(APPEND compile_flags "-flto=thin")
+    list(APPEND compile_flags "-v")
+    list(APPEND link_flags "-flto=thin")
+    list(APPEND link_flags "-v")
+endif ()
 
 # 添加编译选项与链接选项
 list(JOIN link_flags " " link_flags)

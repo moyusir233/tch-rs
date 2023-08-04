@@ -323,6 +323,11 @@ impl TchCmakeBuilder {
         const CMAKE_LIST_SPLIT: &str = ";";
         // 设置表示是rust侧发起的编译的flag
         cmake_config.define("CARGO_BUILD", "");
+        // 表示进行链接时优化lto
+        #[cfg(feature = "lto")]
+        {
+            cmake_config.define("CARGO_LTO", "");
+        }
         // 设置lib名称
         cmake_config.define("CARGO_CXX_LIB_NAME", lib_name);
         // 设置编译选项
