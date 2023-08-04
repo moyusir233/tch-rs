@@ -1,6 +1,6 @@
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-Wl,--allow-shlib-undefined"]
-linker="clang"
+linker="clang-16"
 
 [env]
 # 使用python版本编译好的libtorch

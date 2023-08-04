@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 
-# 使用clang编译
+# 使用clang编译以启用rust跨语言的lto
+# (注:这里使用的是clang-10,以编译cuda相关文件,但rust那边是使用的llvm-16即
+# 应对应clang-16,但没有报错)
 set(CMAKE_C_COMPILER "/usr/bin/clang")
 set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
 
@@ -11,7 +13,6 @@ set(CMAKE_CXX_STANDARD 14)
 
 # 关闭警告
 add_definitions(-w)
-
 
 if (DEFINED CARGO_BUILD)
     # 库名称
@@ -88,12 +89,17 @@ include_directories("${TORCH_INCLUDE_DIRS}")
 include_directories("${header_dirs}")
 
 add_library("${lib_name}" SHARED "${src}")
+
+# 开启lto所需的编译与链接选项
+list(APPEND compile_flags "-flto=thin")
+list(APPEND compile_flags "-v")
+list(APPEND link_flags "-flto=thin")
+list(APPEND link_flags "-v")
+
 # 添加编译选项与链接选项
+list(JOIN link_flags " " link_flags)
 target_compile_options("${lib_name}" PRIVATE "${compile_flags}")
 set_target_properties("${lib_name}" PROPERTIES LINK_FLAGS "${link_flags}")
-
-# 开启lto
-#target_compile_options("${lib_name}" PRIVATE "-flto=thin")
 
 target_link_libraries("${lib_name}" "${TORCH_LIBRARIES}")
 install(TARGETS "${lib_name}" DESTINATION .)
