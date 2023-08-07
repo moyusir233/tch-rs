@@ -1,5 +1,5 @@
-use cxx::UniquePtr;
-use std::ffi::CString;
+use cxx::{UniquePtr};
+use std::ffi::{CStr, CString};
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -57,6 +57,9 @@ pub mod ffi {
 
         /// 设置操作的超时时间,继承于`c10d::Store`类的需要实现的方法
         fn set_prefix_store_timeout(prefix_store: Pin<&mut PrefixStore>, timeout: i64);
+
+        /// std::int64_t add(PrefixStore &store, const std::string &key, std::int64_t value);
+        unsafe fn add(store: Pin<&mut PrefixStore>, key: *const c_char, value: i64) -> i64;
     }
 }
 
@@ -117,6 +120,12 @@ impl NestPrefixStore<TCPStore> for PrefixStore {
     }
 }
 
+impl PrefixStore {
+    pub fn add(self: Pin<&mut Self>, key: &CStr, value: i64) -> i64 {
+        unsafe { ffi::add(self, key.as_ptr(), value) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,12 +133,27 @@ mod tests {
 
     #[test]
     fn store() {
+        fn create_prefix_store(host: String, opts: &MyTCPStoreOptions) -> UniquePtr<PrefixStore> {
+            let mut tcp_store = TCPStore::new(host, opts);
+            tcp_store.pin_mut().set_timeout(Duration::from_secs(100));
+
+            let prefix_store = PrefixStore::nest_store("prefix1".into(), tcp_store);
+            let mut prefix_store = PrefixStore::nest_store("prefix2".into(), prefix_store);
+            prefix_store.pin_mut().set_timeout(Duration::from_secs(100));
+
+            prefix_store
+        }
+
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let host = String::from("localhost");
+        let key = CString::new("store_key").unwrap();
 
         std::thread::spawn({
             let barrier = barrier.clone();
             let host = host.clone();
+            let key = key.as_ref() as *const CStr;
+            // 从裸指针构造可以Send的CStr引用
+            let key: &'static CStr = unsafe { &*key };
             move || {
                 let tcp_store_opts = MyTCPStoreOptions {
                     port: 8080,
@@ -139,8 +163,10 @@ mod tests {
                     timeout: 10000,
                     multi_tenant: false,
                 };
-                let _tcp_store = TCPStore::new(host, &tcp_store_opts);
+                let mut prefix_store = create_prefix_store(host, &tcp_store_opts);
+                prefix_store.pin_mut().add(key, 1);
                 barrier.wait();
+                assert_eq!(prefix_store.pin_mut().add(key, 0), 2);
             }
         });
 
@@ -152,13 +178,9 @@ mod tests {
             timeout: 10000,
             multi_tenant: true,
         };
-        let mut tcp_store = TCPStore::new(host, &tcp_store_opts);
+        let mut prefix_store = create_prefix_store(host, &tcp_store_opts);
+        prefix_store.pin_mut().add(&key, 1);
         barrier.wait();
-
-        tcp_store.pin_mut().set_timeout(Duration::from_secs(100));
-
-        let prefix_store = PrefixStore::nest_store("prefix1".into(), tcp_store);
-        let mut prefix_store = PrefixStore::nest_store("prefix2".into(), prefix_store);
-        prefix_store.pin_mut().set_timeout(Duration::from_secs(100));
+        assert_eq!(prefix_store.pin_mut().add(&key, 0), 2);
     }
 }

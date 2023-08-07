@@ -31,6 +31,8 @@ namespace c10d {
 
     void set_prefix_store_timeout(PrefixStore &prefix_store, std::int64_t timeout);
 
+    std::int64_t add(PrefixStore &store, const char *key, std::int64_t value);
+
     std::unique_ptr<ProcessGroupNCCL> new_process_group_nccl_with_tcp_store(
             std::unique_ptr<TCPStore> store,
             std::int32_t rank,

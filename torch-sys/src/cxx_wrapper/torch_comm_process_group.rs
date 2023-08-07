@@ -42,6 +42,12 @@ pub mod ffi {
             size: i32,
             options: ProcessGroupNCCLOptions,
         ) -> UniquePtr<ProcessGroupNCCL>;
+
+        /// Agrees on an initial sequence number for the whole group by having rank 0
+        /// create it and broadcast it to other ranks using the store. Only implemented
+        /// for GLOO and NCCL backends currently.
+        #[rust_name = "set_sequence_number_for_group"]
+        fn setSequenceNumberForGroup(self: Pin<&mut ProcessGroupNCCL>);
     }
 }
 
@@ -98,7 +104,7 @@ mod tests {
 
     #[test]
     fn nccl_process_group() {
-        let tcp_opts = MyTCPStoreOptions {
+        let mut tcp_opts = MyTCPStoreOptions {
             port: 8081,
             is_server: true,
             num_workers: 1,
@@ -113,9 +119,11 @@ mod tests {
             let _nccl_process_group = ProcessGroupNCCL::from_store(tcp_store, 0, 1, nccl_opts);
         }
 
+        tcp_opts.port = 8081;
         let prefix_store =
             PrefixStore::nest_store("test".into(), TCPStore::new("localhost".into(), &tcp_opts));
         let nccl_opts = ProcessGroupNCCLOptions::new(Duration::from_secs(10), true);
-        let _nccl_process_group = ProcessGroupNCCL::from_store(prefix_store, 0, 1, nccl_opts);
+        let mut nccl_process_group = ProcessGroupNCCL::from_store(prefix_store, 0, 1, nccl_opts);
+        nccl_process_group.pin_mut().set_sequence_number_for_group();
     }
 }
