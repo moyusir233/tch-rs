@@ -229,7 +229,7 @@ impl SourceFileManager {
     // 生成cxx相关的源文件
     fn generate_cxx_wrapper(&self, cxx_rs_relative_dir: impl AsRef<Path>) {
         let _ = cxx_build::bridges(
-            get_all_file_path(cxx_rs_relative_dir).into_iter(), // .filter(|path| !path.ends_with("torch_comm_process_group.rs")),
+            get_all_file_path(cxx_rs_relative_dir), // .filter(|path| !path.ends_with("torch_comm_process_group.rs")),
         );
     }
     // 生成autocxx相关的源文件
@@ -392,6 +392,10 @@ impl TchCmakeBuilder {
         const CMAKE_LIST_SPLIT: &str = ";";
         // 设置表示是rust侧发起的编译的flag
         cmake_config.define("CARGO_BUILD", "");
+        // 表示进行测试
+        if cfg!(test) {
+            cmake_config.define("CARGO_TEST", "");
+        }
         // 表示进行链接时优化lto
         #[cfg(feature = "lto")]
         {
