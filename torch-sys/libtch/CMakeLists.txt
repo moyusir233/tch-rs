@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.9 FATAL_ERROR)
 
 if (DEFINED CARGO_LTO)
     # 使用clang编译以启用rust跨语言的lto
@@ -9,6 +9,11 @@ if (DEFINED CARGO_LTO)
 endif ()
 
 project(tch)
+
+if (DEFINED CARGO_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported()
+endif ()
 
 # 设置c++标准
 set(CMAKE_CXX_STANDARD 14)
@@ -98,6 +103,8 @@ if (DEFINED CARGO_LTO)
     list(APPEND compile_flags "-v")
     list(APPEND link_flags "-flto=thin")
     list(APPEND link_flags "-v")
+    list(APPEND link_flags "-fuse-ld=lld")
+    set_property(TARGET ${lib_name} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif ()
 
 # 添加编译选项与链接选项
