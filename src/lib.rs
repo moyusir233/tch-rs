@@ -10,7 +10,6 @@ pub use error::TchError;
 pub type Result<T> = std::result::Result<T, error::TchError>;
 
 pub(crate) mod wrappers;
-pub use wrappers::cxx_wrapper::*;
 pub use wrappers::device::{Cuda, Device};
 pub use wrappers::jit::{self, CModule, IValue, TrainableCModule};
 pub use wrappers::kind::{self, Kind};
@@ -19,6 +18,8 @@ pub use wrappers::optimizer::COptimizer;
 #[cfg(feature = "python-extension")]
 pub use wrappers::python;
 pub use wrappers::scalar::Scalar;
+pub use wrappers::torch_cuda;
+pub use wrappers::torch_distributed;
 pub use wrappers::utils;
 pub use wrappers::{
     get_num_interop_threads, get_num_threads, manual_seed, set_num_interop_threads,

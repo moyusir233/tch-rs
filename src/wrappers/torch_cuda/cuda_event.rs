@@ -1,8 +1,8 @@
 use std::pin::Pin;
 
 use derive_builder::Builder;
-pub use torch_sys::cxx_wrapper::torch_cuda_event::CUDAEvent;
-use torch_sys::cxx_wrapper::torch_cuda_stream::CUDAStream;
+pub use torch_sys::wrappers::torch_cuda::cuda_event::CUDAEvent;
+use torch_sys::wrappers::torch_cuda::cuda_stream::CUDAStream;
 
 use crate::error::TchResult;
 
@@ -61,7 +61,7 @@ mod tests {
         let epoch = 10;
         let time_per_epoch = 100;
 
-        let _device_guard = crate::cuda_guards::CUDAGuard::new(device.c_int() as i8);
+        let _device_guard = crate::torch_cuda::cuda_guards::CUDAGuard::new(device.c_int() as i8);
 
         let mut start_event = CUDAEventBuilder::default().build();
         start_event.pin_mut().record_current_stream()?;

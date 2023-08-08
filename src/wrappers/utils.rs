@@ -2,7 +2,7 @@ use crate::TchError;
 use libc::c_char;
 use std::io;
 
-pub use torch_sys::cxx_wrapper::torch_utils::*;
+pub use torch_sys::wrappers::torch_utils::*;
 
 // This returns None on the null pointer. If not null, the pointer gets
 // freed.

@@ -1,6 +1,6 @@
 use cxx::memory::UniquePtrTarget;
-pub use torch_sys::cxx_wrapper::torch_cuda_guard::*;
-use torch_sys::cxx_wrapper::torch_cuda_stream::CUDAStream;
+pub use torch_sys::wrappers::torch_cuda::cuda_guard::*;
+use torch_sys::wrappers::torch_cuda::cuda_stream::CUDAStream;
 
 use crate::error::TchResult;
 

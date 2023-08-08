@@ -6,7 +6,6 @@ pub use utils::{
     set_num_threads, QEngine,
 };
 
-pub mod cxx_wrapper;
 pub(crate) mod device;
 pub(crate) mod image;
 pub mod jit;
@@ -20,3 +19,6 @@ pub(crate) mod stream;
 pub(crate) mod tensor;
 pub(crate) mod tensor_fallible_generated;
 pub(crate) mod tensor_generated;
+
+pub mod torch_cuda;
+pub mod torch_distributed;

@@ -1,8 +1,8 @@
 use cxx::UniquePtr;
 use std::pin::Pin;
-pub use torch_sys::cxx_wrapper::torch_cuda_graph::{CUDAGraph, MemPoolId};
-use torch_sys::cxx_wrapper::torch_cuda_guard::CUDAStreamGuard;
-use torch_sys::cxx_wrapper::torch_cuda_stream::CUDAStream;
+pub use torch_sys::wrappers::torch_cuda::cuda_graph::{CUDAGraph, MemPoolId};
+use torch_sys::wrappers::torch_cuda::cuda_guard::CUDAStreamGuard;
+use torch_sys::wrappers::torch_cuda::cuda_stream::CUDAStream;
 
 use crate::error::TchResult;
 
@@ -35,7 +35,7 @@ impl<'a> RecordGuard<'a> {
         capture_stream: Option<&CUDAStream>,
         pool: Option<MemPoolId>,
     ) -> Result<Self, crate::TchError> {
-        use torch_sys::cxx_wrapper::torch_utils::empty_cache;
+        use torch_sys::wrappers::torch_utils::empty_cache;
 
         // 捕获前的准备工作,参考了torch/cuda/graphs.py
         crate::Cuda::synchronize(-1);

@@ -708,6 +708,8 @@ impl SystemInfo {
         .join("libtch");
         // 用于生成cxx相关的源文件的rs代码的相对目录
         let cxx_rs_relative_dir = "src/wrappers";
+        // 用于编写cxx wrapper的rs源文件的名称
+        let cxx_wrapper_file_name = "cxx_wrappers.rs";
         // 用于生成autocxx binding的rust源文件
         let autocxx_rs_file = "src/wrappers/autocxx_wrappers.rs";
         // cuda的头文件目录
@@ -727,7 +729,7 @@ impl SystemInfo {
             &mut src,
             &mut header_dirs,
             cxx_rs_relative_dir,
-            "cxx_wrappers.rs",
+            cxx_wrapper_file_name,
         );
         source_file_manager.add_extra_libtorch_header_dirs(&mut header_dirs, libtorch_src_dir);
         // 因为autocxx需要利用bindgen去读取c++头文件,注意在所有头文件目录添加完毕后才去生成

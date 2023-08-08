@@ -4,7 +4,7 @@ use std::pin::Pin;
 use crate::error::TchResult;
 
 use super::cuda_event::{CUDAEvent, CUDAEventBuilder};
-pub use torch_sys::cxx_wrapper::torch_cuda_stream::CUDAStream;
+pub use torch_sys::wrappers::torch_cuda::cuda_stream::CUDAStream;
 
 pub trait CUDAStreamExt {
     /// 令cuda stream等待cuda event上的操作执行完毕
