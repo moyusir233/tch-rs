@@ -1,129 +1,92 @@
-use crate::cxx_wrapper::torch_comm_store::{PrefixStore, Store, TCPStore};
+use crate::autocxx_wrapper::torch_comm_process_group::*;
+use crate::autocxx_wrapper::torch_comm_store::{ArcPrefixStore, ArcTCPStore};
+use crate::cxx_wrapper::torch_comm_store::*;
+use autocxx::prelude::*;
 use cxx::UniquePtr;
-use std::time::Duration;
-
-pub use ffi::{ProcessGroupNCCL, ProcessGroupNCCLOptions};
-
-/// 定义支持多进程之间通信的不同通信进程组,可见文档:
-/// [pytorch-distributed-process_group](https://pytorch.org/docs/stable/distributed.html#initialization)
-#[cxx::bridge]
-pub mod ffi {
-
-    /// 表示`c10d::ProcessGroupNCCL::Options`,详见torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp
-    #[namespace = "c10d"]
-    #[derive(Clone)]
-    pub struct ProcessGroupNCCLOptions {
-        timeout: i64,
-        is_high_priority_stream: bool,
-    }
-
-    #[namespace = "c10d"]
-    unsafe extern "C++" {
-        include!("torch_comm_process_group.h");
-
-        /// 表示`c10d::ProcessGroupNCCL`,详见torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp
-        pub type ProcessGroupNCCL;
-
-        type PrefixStore = crate::cxx_wrapper::torch_comm_store::ffi::PrefixStore;
-        type TCPStore = crate::cxx_wrapper::torch_comm_store::ffi::TCPStore;
-
-        /// 利用`TCPStore`创建`ProcessGroupNCCL`
-        fn new_process_group_nccl_with_tcp_store(
-            store: UniquePtr<TCPStore>,
-            rank: i32,
-            size: i32,
-            options: ProcessGroupNCCLOptions,
-        ) -> UniquePtr<ProcessGroupNCCL>;
-
-        /// 利用`PrefixStore`创建`ProcessGroupNCCL`
-        fn new_process_group_nccl_with_prefix_store(
-            store: UniquePtr<PrefixStore>,
-            rank: i32,
-            size: i32,
-            options: ProcessGroupNCCLOptions,
-        ) -> UniquePtr<ProcessGroupNCCL>;
-
-        /// Agrees on an initial sequence number for the whole group by having rank 0
-        /// create it and broadcast it to other ranks using the store. Only implemented
-        /// for GLOO and NCCL backends currently.
-        #[rust_name = "set_sequence_number_for_group"]
-        fn setSequenceNumberForGroup(self: Pin<&mut ProcessGroupNCCL>);
-    }
-}
+use std::ops::Deref;
 
 pub trait FromStore<S: Store + cxx::memory::UniquePtrTarget> {
     fn from_store(
-        store: UniquePtr<S>,
+        store: &S,
         rank: i32,
         size: i32,
         options: ProcessGroupNCCLOptions,
-    ) -> UniquePtr<Self>
+    ) -> UniquePtr<ArcProcessGroupNCCL>
     where
         Self: Sized + cxx::memory::UniquePtrTarget;
 }
 
-impl FromStore<TCPStore> for ProcessGroupNCCL {
+impl FromStore<ArcTCPStore> for ArcProcessGroupNCCL {
     fn from_store(
-        store: UniquePtr<TCPStore>,
+        store: &ArcTCPStore,
+        rank: i32,
+        size: i32,
+        options: ProcessGroupNCCLOptions,
+    ) -> UniquePtr<ArcProcessGroupNCCL> {
+        ArcProcessGroupNCCL::new1(store, rank.into(), size.into(), options).within_unique_ptr()
+    }
+}
+
+impl FromStore<ArcPrefixStore> for ArcProcessGroupNCCL {
+    fn from_store(
+        store: &ArcPrefixStore,
         rank: i32,
         size: i32,
         options: ProcessGroupNCCLOptions,
     ) -> UniquePtr<Self> {
-        ffi::new_process_group_nccl_with_tcp_store(store, rank, size, options)
-    }
-}
-
-impl FromStore<PrefixStore> for ProcessGroupNCCL {
-    fn from_store(
-        store: UniquePtr<PrefixStore>,
-        rank: i32,
-        size: i32,
-        options: ProcessGroupNCCLOptions,
-    ) -> UniquePtr<Self> {
-        ffi::new_process_group_nccl_with_prefix_store(store, rank, size, options)
-    }
-}
-
-impl ProcessGroupNCCLOptions {
-    pub fn new(timeout: Duration, is_high_priority_stream: bool) -> Self {
-        Self { timeout: timeout.as_millis() as i64, is_high_priority_stream }
+        ArcProcessGroupNCCL::new(store, rank.into(), size.into(), options).within_unique_ptr()
     }
 }
 
 impl Default for ProcessGroupNCCLOptions {
     fn default() -> Self {
-        Self { timeout: 30 * 60 * 1000, is_high_priority_stream: false }
+        moveit! {
+            let default_opts=Self::new();
+        }
+        Self { ..*default_opts.deref() }
+    }
+}
+
+impl Clone for ProcessGroupNCCLOptions {
+    fn clone(&self) -> Self {
+        Self { ..*self }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cxx_wrapper::torch_comm_store::MyTCPStoreOptions;
-    use crate::cxx_wrapper::torch_comm_store::NestPrefixStore;
+    use crate::autocxx_wrapper::torch_comm_store::MyTCPStoreOptions;
 
     #[test]
     fn nccl_process_group() {
-        let mut tcp_opts = MyTCPStoreOptions {
+        let tcp_opts = MyTCPStoreOptions {
             port: 8081,
-            is_server: true,
-            num_workers: 1,
-            wait_workers: true,
+            isServer: true,
+            numWorkers: 1,
+            waitWorkers: true,
             timeout: 10000,
-            multi_tenant: false,
+            multiTenant: false,
         };
-        let tcp_store = TCPStore::new("localhost".into(), &tcp_opts);
+        let tcp_store = ArcTCPStore::new("localhost", &tcp_opts).within_unique_ptr();
 
         {
-            let nccl_opts = ProcessGroupNCCLOptions::new(Duration::from_secs(10), true);
-            let _nccl_process_group = ProcessGroupNCCL::from_store(tcp_store, 0, 1, nccl_opts);
+            let nccl_opts =
+                ProcessGroupNCCLOptions { timeout: 10000, is_high_priority_stream: true };
+            let _nccl_process_group =
+                ArcProcessGroupNCCL::from_store(tcp_store.as_ref().unwrap(), 0, 1, nccl_opts);
+            drop(tcp_store);
         }
 
-        tcp_opts.port = 8081;
-        let prefix_store =
-            PrefixStore::nest_store("test".into(), TCPStore::new("localhost".into(), &tcp_opts));
-        let nccl_opts = ProcessGroupNCCLOptions::new(Duration::from_secs(10), true);
-        let mut nccl_process_group = ProcessGroupNCCL::from_store(prefix_store, 0, 1, nccl_opts);
+        let prefix_store = ArcPrefixStore::nest_store(
+            "test".into(),
+            ArcTCPStore::new("localhost", &tcp_opts).within_unique_ptr(),
+        );
+
+        let nccl_opts = ProcessGroupNCCLOptions { timeout: 10000, is_high_priority_stream: true };
+        let mut nccl_process_group =
+            ArcProcessGroupNCCL::from_store(prefix_store.as_ref().unwrap(), 0, 1, nccl_opts);
+
         nccl_process_group.pin_mut().set_sequence_number_for_group();
     }
 }

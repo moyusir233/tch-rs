@@ -3,8 +3,16 @@
 
 #include <c10/util/intrusive_ptr.h>
 
+/*
+ *  用于创建包装torch常用的引用计数指针的类的宏
+ * */
 #define CREATE_CONTAINER_CLASS(CLASS_NAME_, WRAP_TYPE_) \
 class CLASS_NAME_ { \
+protected: \
+     explicit CLASS_NAME_(c10::intrusive_ptr<WRAP_TYPE_> value) noexcept: inner(std::move(value)) {} \
+ \
+     explicit CLASS_NAME_() noexcept: inner() {} \
+\
 public: \
     c10::intrusive_ptr<WRAP_TYPE_> inner; \
  \
@@ -19,17 +27,5 @@ public: \
     } \
 };
 
-class MyIntrusiveTarget : public c10::intrusive_ptr_target {
-public:
-    MyIntrusiveTarget() {
-        printf("create a target\n");
-    }
-
-    ~MyIntrusiveTarget() override {
-        printf("destroy a target\n");
-    }
-};
-
-CREATE_CONTAINER_CLASS(Wrapper, MyIntrusiveTarget)
 
 #endif //TCH_CXX_WRAPPER_UTILS_H
