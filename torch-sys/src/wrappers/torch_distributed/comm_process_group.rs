@@ -1,6 +1,5 @@
-use crate::autocxx_wrapper::torch_comm_process_group::*;
-use crate::autocxx_wrapper::torch_comm_store::{ArcPrefixStore, ArcTCPStore};
-use crate::cxx_wrapper::torch_comm_store::*;
+pub use crate::wrappers::autocxx_wrappers::torch_distributed::comm_process_group::*;
+use crate::wrappers::torch_distributed::comm_store::*;
 use autocxx::prelude::*;
 use cxx::UniquePtr;
 use std::ops::Deref;
@@ -11,7 +10,7 @@ pub trait FromStore<S: Store + cxx::memory::UniquePtrTarget> {
         rank: i32,
         size: i32,
         options: ProcessGroupNCCLOptions,
-    ) -> UniquePtr<ArcProcessGroupNCCL>
+    ) -> UniquePtr<Self>
     where
         Self: Sized + cxx::memory::UniquePtrTarget;
 }
@@ -22,7 +21,7 @@ impl FromStore<ArcTCPStore> for ArcProcessGroupNCCL {
         rank: i32,
         size: i32,
         options: ProcessGroupNCCLOptions,
-    ) -> UniquePtr<ArcProcessGroupNCCL> {
+    ) -> UniquePtr<Self> {
         ArcProcessGroupNCCL::new1(store, rank.into(), size.into(), options).within_unique_ptr()
     }
 }
@@ -56,7 +55,7 @@ impl Clone for ProcessGroupNCCLOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::autocxx_wrapper::torch_comm_store::MyTCPStoreOptions;
+    use crate::wrappers::torch_distributed::comm_store::MyTCPStoreOptions;
 
     #[test]
     fn nccl_process_group() {

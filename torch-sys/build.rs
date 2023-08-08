@@ -227,11 +227,21 @@ fn get_all_file_path(dir: impl AsRef<Path>) -> Vec<PathBuf> {
 
 impl SourceFileManager {
     // 生成cxx相关的源文件
-    fn generate_cxx_wrapper(&self, cxx_rs_relative_dir: impl AsRef<Path>, filter_files: &[&str]) {
-        let _ =
-            cxx_build::bridges(get_all_file_path(cxx_rs_relative_dir).iter().filter(|path| {
-                filter_files.iter().all(|filter_file| !path.ends_with(filter_file))
-            }));
+    fn generate_cxx_wrapper(
+        &self,
+        cxx_rs_relative_dir: impl AsRef<Path>,
+        cxx_wrapper_file_name: &str,
+    ) {
+        let _ = cxx_build::bridges(get_all_file_path(cxx_rs_relative_dir).iter().filter(|path| {
+            if path.is_dir() {
+                return false;
+            }
+
+            path.file_name()
+                .map(|file_name| file_name == cxx_wrapper_file_name)
+                .context("failed to get file name")
+                .unwrap()
+        }));
     }
     // 生成autocxx相关的源文件
     fn generate_autocxx_wrapper<P: AsRef<Path>, I: IntoIterator<Item = P>>(
@@ -286,21 +296,21 @@ impl SourceFileManager {
                 *path = self.libtch_project_dir.join(&path);
             });
     }
+
     fn add_cxx_wrapper_src_and_header_dirs(
         &self,
         src: &mut Vec<PathBuf>,
         header_dirs: &mut Vec<PathBuf>,
         cxx_rs_relative_dir: impl AsRef<Path>,
+        cxx_wrapper_file_name: &str,
     ) {
         // 产生cxx相关的源文件
-        self.generate_cxx_wrapper(
-            &cxx_rs_relative_dir,
-            &["torch_comm_store.rs", "torch_comm_process_group.rs"],
-        );
+        self.generate_cxx_wrapper(&cxx_rs_relative_dir, cxx_wrapper_file_name);
 
         // 加入cxx相关的源文件,包括自定义存放在libtch目录下的一部分,以及cxx生成的、包装
         // 这一部分代码,为rust侧提供binding的另一部分
-        src.extend(get_all_file_path(self.libtch_project_dir.join("src/cxx-wrapper")));
+        src.extend(get_all_file_path(self.libtch_project_dir.join("src/wrappers")));
+
         // cxx所生产的代码的布局相关的注释如下,
         // 其中`...`为用于生成cxx代码的rust源文件所在的目录的相对路径,即为`cxx_rs_relative_dir`
         // We lay out the OUT_DIR as follows. Everything is namespaced under a cxxbridge
@@ -327,15 +337,11 @@ impl SourceFileManager {
         // on the current crate.
         // 加入cxx生成的源文件
         let out_dir = get_out_dir();
-        src.extend(get_all_file_path(
-            out_dir.join("cxxbridge/sources/torch-sys").join(&cxx_rs_relative_dir),
-        ));
+        src.extend(get_all_file_path(out_dir.join("cxxbridge/sources/torch-sys")));
 
-        // 头文件目录
-        header_dirs.push(self.libtch_project_dir.join("include/cxx-wrapper"));
         // 加入cxx生成的头文件的目录
         header_dirs.extend([
-            out_dir.join("cxxbridge/include/torch-sys").join(cxx_rs_relative_dir),
+            out_dir.join("cxxbridge/include/torch-sys/src"),
             out_dir.join("cxxbridge/include/rust"),
         ]);
     }
@@ -701,9 +707,9 @@ impl SystemInfo {
         )
         .join("libtch");
         // 用于生成cxx相关的源文件的rs代码的相对目录
-        let cxx_rs_relative_dir = "src/cxx_wrapper";
+        let cxx_rs_relative_dir = "src/wrappers";
         // 用于生成autocxx binding的rust源文件
-        let autocxx_rs_file = "src/autocxx_wrapper.rs";
+        let autocxx_rs_file = "src/wrappers/autocxx_wrappers.rs";
         // cuda的头文件目录
         let cuda_include_dirs = [PathBuf::from("/usr/local/cuda/include")];
 
@@ -721,6 +727,7 @@ impl SystemInfo {
             &mut src,
             &mut header_dirs,
             cxx_rs_relative_dir,
+            "cxx_wrappers.rs",
         );
         source_file_manager.add_extra_libtorch_header_dirs(&mut header_dirs, libtorch_src_dir);
         // 因为autocxx需要利用bindgen去读取c++头文件,注意在所有头文件目录添加完毕后才去生成

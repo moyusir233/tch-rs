@@ -1,4 +1,4 @@
-#include "torch_cuda_stream.h"
+#include "wrappers/torch_cuda/cuda_stream.h"
 
 #include <memory>
 

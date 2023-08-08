@@ -8,8 +8,8 @@
 #include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
 #include <torch/csrc/distributed/c10d/Backend.hpp>
 
-#include "cxx_wrapper_utils.h"
-#include "torch_comm_store.h"
+#include "wrappers/utils.h"
+#include "wrappers/torch_distributed/comm_store.h"
 
 
 namespace c10d {

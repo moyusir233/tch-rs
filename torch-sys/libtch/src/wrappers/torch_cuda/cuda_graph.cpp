@@ -1,5 +1,5 @@
-#include "torch_cuda_graph.h"
-#include "torch_cuda_graph.rs.h"
+#include "wrappers/torch_cuda/cuda_graph.h"
+#include "wrappers/torch_cuda/cuda_graph/cxx_wrappers.rs.h"
 
 namespace at {
     namespace cuda {

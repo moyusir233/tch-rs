@@ -1,4 +1,4 @@
-use crate::autocxx_wrapper::torch_comm_store::*;
+pub use crate::wrappers::autocxx_wrappers::torch_distributed::comm_store::*;
 use autocxx::prelude::*;
 use cxx::UniquePtr;
 use std::ops::Deref;
@@ -55,7 +55,7 @@ impl NestPrefixStore<ArcTCPStore> for ArcPrefixStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::autocxx_wrapper::torch_comm_store::ToCppString;
+    use crate::wrappers::torch_distributed::comm_store::ToCppString;
     use std::sync::Arc;
 
     #[test]

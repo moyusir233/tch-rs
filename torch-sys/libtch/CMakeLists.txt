@@ -52,8 +52,7 @@ else ()
     set(CARGO_OUT_DIR "/workspaces/tch-rs/target")
     set(header_dirs
             "${CMAKE_SOURCE_DIR}/include"
-            "${CMAKE_SOURCE_DIR}/include/cxx-wrapper"
-            "${CARGO_OUT_DIR}/cxxbridge/torch-sys/src/cxx_wrapper"
+            "${CARGO_OUT_DIR}/cxxbridge/torch-sys/src"
             "${CARGO_OUT_DIR}/cxxbridge/rust"
             # 默认使用conda安装的python的头文件目录(编写python插件的cxx源文件需要相关头文件)
             #            "/opt/conda/include/python3.10"
@@ -63,6 +62,7 @@ else ()
 
     # 默认为src目录下的所有文件以及cargo OUT_DIR目录下的cxx源文件
     file(GLOB_RECURSE src "${CMAKE_SOURCE_DIR}/src/*" "${CARGO_OUT_DIR}/cxxbridge/torch-sys/src/cxx_wrapper/*.cc")
+    message("src: ${src}")
     # 过滤掉fake的cuda文件
     list(FILTER src EXCLUDE REGEX ".*fake_cuda_dependency.cpp$")
     list(FILTER src EXCLUDE REGEX ".*torch_python.cpp$")

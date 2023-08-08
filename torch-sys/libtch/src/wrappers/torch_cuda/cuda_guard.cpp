@@ -1,4 +1,4 @@
-#include "torch_cuda_guard.h"
+#include "wrappers/torch_cuda/cuda_guard.h"
 
 namespace c10 {
     namespace cuda {

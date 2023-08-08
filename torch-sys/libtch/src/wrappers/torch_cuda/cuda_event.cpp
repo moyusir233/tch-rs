@@ -1,4 +1,4 @@
-#include "torch_cuda_event.h"
+#include "wrappers/torch_cuda/cuda_event.h"
 
 #include <memory>
 

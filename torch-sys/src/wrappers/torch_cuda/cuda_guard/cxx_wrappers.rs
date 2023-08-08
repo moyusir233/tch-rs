@@ -1,17 +1,12 @@
-use crate::cxx_wrapper::torch_cuda_stream::ffi::CUDAStream;
-use cxx::UniquePtr;
-use std::pin::Pin;
+pub use ffi::*;
 
-pub use ffi::{
-    CUDAGuard, CUDAMultiStreamGuard, CUDAStreamGuard, OptionalCUDAGuard, OptionalCUDAStreamGuard,
-};
 /// 一系列libtorch中常用的与cuda相关的RAII guard类
 #[cxx::bridge]
 pub mod ffi {
 
     #[namespace = "c10::cuda"]
     unsafe extern "C++" {
-        include!("torch_cuda_guard.h");
+        include!("wrappers/torch_cuda/cuda_guard.h");
 
         /// 代表着`c10::cuda::CUDAGuard`,详细可见c10/cuda/CUDAGuard.h,
         /// `CUDAGuard`的实例会**确保其被析构时将current device设置为创建实例时的current device**
@@ -63,7 +58,7 @@ pub mod ffi {
         /// 不过切换current stream时也会将current device设置为传入stream所在的device
         pub type CUDAStreamGuard;
         #[namespace = "c10::cuda"]
-        type CUDAStream = crate::cxx_wrapper::torch_cuda_stream::ffi::CUDAStream;
+        type CUDAStream = crate::wrappers::torch_cuda::cuda_stream::CUDAStream;
 
         fn new_cuda_stream_guard(stream: &CUDAStream) -> UniquePtr<CUDAStreamGuard>;
 
@@ -119,115 +114,5 @@ pub mod ffi {
             streams: *const CUDAStream,
             length: usize,
         ) -> UniquePtr<CUDAMultiStreamGuard>;
-    }
-}
-type CxxResult<T> = Result<T, cxx::Exception>;
-impl ffi::CUDAGuard {
-    pub fn new(device_index: i8) -> UniquePtr<Self> {
-        ffi::new_cuda_guard(device_index)
-    }
-    pub fn get_original_device(&self) -> i8 {
-        ffi::cuda_guard_original_device(self)
-    }
-    pub fn get_current_device(&self) -> i8 {
-        ffi::cuda_guard_current_device(self)
-    }
-}
-
-impl ffi::OptionalCUDAGuard {
-    pub fn new(device_index: i8) -> UniquePtr<Self> {
-        ffi::new_optional_cuda_guard(device_index)
-    }
-    pub fn new_without_init() -> UniquePtr<Self> {
-        ffi::new_uninit_optional_cuda_guard()
-    }
-    pub fn get_original_device(&self) -> Option<i8> {
-        let device_index = ffi::optional_cuda_guard_original_device(self);
-        if device_index == -1 {
-            None
-        } else {
-            Some(device_index)
-        }
-    }
-    pub fn get_current_device(&self) -> Option<i8> {
-        let device_index = ffi::optional_cuda_guard_current_device(self);
-        if device_index == -1 {
-            None
-        } else {
-            Some(device_index)
-        }
-    }
-}
-
-impl ffi::CUDAStreamGuard {
-    pub fn new(cuda_stream: &CUDAStream) -> UniquePtr<Self> {
-        ffi::new_cuda_stream_guard(cuda_stream)
-    }
-    /// 和`CUDAGuard`的`set_device`作用类似,只不过会同时切换current device和current stream
-    pub fn set_stream(self: Pin<&mut Self>, cuda_stream: &CUDAStream) -> CxxResult<()> {
-        ffi::cuda_stream_guard_set_stream(self, cuda_stream)
-    }
-    pub fn get_original_stream(&self) -> UniquePtr<CUDAStream> {
-        ffi::cuda_stream_guard_original_stream(self)
-    }
-    pub fn get_current_stream(&self) -> UniquePtr<CUDAStream> {
-        ffi::cuda_stream_guard_current_stream(self)
-    }
-    pub fn get_original_device(&self) -> i8 {
-        ffi::cuda_stream_guard_original_device(self)
-    }
-    pub fn get_current_device(&self) -> i8 {
-        ffi::cuda_stream_guard_current_device(self)
-    }
-}
-
-impl ffi::OptionalCUDAStreamGuard {
-    pub fn new(cuda_stream: &CUDAStream) -> UniquePtr<Self> {
-        ffi::new_optional_cuda_stream_guard(cuda_stream)
-    }
-    pub fn new_without_init() -> UniquePtr<Self> {
-        ffi::new_uninit_optional_cuda_stream_guard()
-    }
-    pub fn set_stream(self: Pin<&mut Self>, cuda_stream: &CUDAStream) -> CxxResult<()> {
-        ffi::optional_cuda_stream_guard_set_stream(self, cuda_stream)
-    }
-    pub fn get_original_stream(&self) -> Option<UniquePtr<CUDAStream>> {
-        let ptr = ffi::optional_cuda_stream_guard_original_stream(self);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(ptr)
-        }
-    }
-    pub fn get_current_stream(&self) -> Option<UniquePtr<CUDAStream>> {
-        let ptr = ffi::optional_cuda_stream_guard_current_stream(self);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(ptr)
-        }
-    }
-}
-
-impl ffi::CUDAMultiStreamGuard {
-    // TODO 改善接口
-    pub fn new(streams: &[CUDAStream]) -> UniquePtr<Self> {
-        unsafe { ffi::new_cuda_multi_stream_guard(streams.as_ptr(), streams.len()) }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn init() {
-        let device = -1;
-        let _cuda_guard = CUDAGuard::new(device);
-        let _optional_cuda_guard = OptionalCUDAGuard::new(device);
-        let cuda_stream =
-            CUDAStream::get_default_cuda_stream(device).expect("failed to create cuda stream");
-        let _cuda_stream_gurad = CUDAStreamGuard::new(&cuda_stream);
-        let _optional_cuda_stream_gurad = OptionalCUDAStreamGuard::new(&cuda_stream);
     }
 }

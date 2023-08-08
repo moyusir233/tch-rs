@@ -3,12 +3,10 @@ pub mod io;
 #[cfg(feature = "python-extension")]
 pub mod python;
 mod traits;
-#[cfg(not(libtorch_static_link))]
-#[macro_use]
-pub mod autocxx_wrapper;
+
 // 静态链接还未测试,因此先用条件编译过滤掉cxx_wrapper中需要链接libtorch的源文件
 #[cfg(not(libtorch_static_link))]
-pub mod cxx_wrapper;
+mod wrappers;
 
 use libc::{c_char, c_int, c_uchar, c_void, size_t};
 pub use traits::{DoubleList, IntList, IntListOption};

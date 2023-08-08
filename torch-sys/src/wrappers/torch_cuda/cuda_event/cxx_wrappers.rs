@@ -1,9 +1,4 @@
-use cxx::UniquePtr;
-
-#[allow(unused)]
-use std::pin::Pin;
-
-pub use ffi::CUDAEvent;
+pub use ffi::*;
 
 /// 利用cxx定义的pytorch底层使用的cuda event
 #[cxx::bridge]
@@ -11,13 +6,13 @@ pub mod ffi {
 
     #[namespace = "at::cuda"]
     unsafe extern "C++" {
-        include!("torch_cuda_event.h");
+        include!("wrappers/torch_cuda/cuda_event.h");
 
         /// 代表着`at::cuda::CUDAEvent`,详细可见ATen/cuda/CUDAEvent.h
         pub type CUDAEvent;
         /// 代表着`c10::cuda::CUDAStream`,详细可见c10/cuda/CUDAStream.h
         #[namespace = "c10::cuda"]
-        type CUDAStream = crate::cxx_wrapper::torch_cuda_stream::ffi::CUDAStream;
+        type CUDAStream = crate::wrappers::torch_cuda::cuda_stream::CUDAStream;
 
         /// 使用默认的配置创建cuda event(默认启用cudaEventDisableTiming flag),
         fn new_cuda_event() -> UniquePtr<CUDAEvent>;
@@ -58,36 +53,5 @@ pub mod ffi {
 
         /// 等待一个事件执行完毕
         fn synchronize(self: &CUDAEvent) -> Result<()>;
-    }
-}
-
-impl ffi::CUDAEvent {
-    /// 使用默认的配置创建cuda event(默认启用cudaEventDisableTiming flag),
-    pub fn new() -> UniquePtr<Self> {
-        ffi::new_cuda_event()
-    }
-    /// 来创建启用了指定标志位的cuda event,
-    /// 允许的flag可见:[cuda event文档](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__EVENT.html#group__CUDART__EVENT)
-    pub fn new_with_flags(flags: usize) -> UniquePtr<Self> {
-        ffi::new_cuda_event_with_flags(flags)
-    }
-}
-#[cfg(test)]
-mod cuda_event_tests {
-    use super::*;
-    #[test]
-    fn uninit_event() {
-        let uninit_cuda_event = ffi::new_cuda_event();
-        let device_index = uninit_cuda_event.get_device_index();
-        let is_created = uninit_cuda_event.is_created();
-        assert!(!is_created);
-        assert_eq!(device_index, -1);
-    }
-    #[test]
-    fn handle_elapsed_time_error() {
-        let uninit_event1 = ffi::new_cuda_event();
-        let uninit_event2 = ffi::new_cuda_event();
-        let result = uninit_event1.elapsed_time(uninit_event2.as_ref().unwrap());
-        assert!(result.is_err());
     }
 }
