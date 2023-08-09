@@ -46,7 +46,7 @@ namespace c10d {
 
     class ArcPrefixStore : public _ArcPrefixStore {
     private:
-        explicit ArcPrefixStore() : _ArcPrefixStore() {}
+        explicit ArcPrefixStore(const c10::intrusive_ptr<PrefixStore> &store) : _ArcPrefixStore(store) {}
 
     public:
         explicit ArcPrefixStore(std::string
@@ -60,18 +60,17 @@ namespace c10d {
                                 ArcPrefixStore store
         ) : _ArcPrefixStore(c10::make_intrusive<PrefixStore>(std::move(prefix), std::move(store.inner))) {}
 
-        ArcPrefixStore clone() const {
-            auto store = ArcPrefixStore();
-            store.inner = std::move(c10::intrusive_ptr<PrefixStore>(inner));
-            return std::move(store);
+        ArcPrefixStore clone_() const {
+            return ArcPrefixStore(inner);
         }
 
         void setTimeout(std::int64_t milliseconds) {
             inner->setTimeout(std::chrono::milliseconds(milliseconds));
         }
 
-        int64_t add(const std::string &key, int64_t value) {
-            return inner->add(key, value);
+        // 注意add操作内部利用了线程锁mutex
+        int64_t add_(const char *key, int64_t value) {
+            return inner->add(std::string(key), value);
         }
     };
 

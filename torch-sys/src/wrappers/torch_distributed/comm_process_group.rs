@@ -1,5 +1,5 @@
 pub use crate::wrappers::autocxx_wrappers::torch_distributed::comm_process_group::*;
-use crate::wrappers::torch_distributed::comm_store::*;
+use crate::wrappers::torch_distributed::comm_store::Store;
 use autocxx::prelude::*;
 use cxx::UniquePtr;
 use std::ops::Deref;
@@ -53,12 +53,12 @@ impl Clone for ProcessGroupNCCLOptions {
 }
 
 #[cfg(test)]
-mod tests {
+mod nccl_process_group {
     use super::*;
     use crate::wrappers::torch_distributed::comm_store::MyTCPStoreOptions;
 
     #[test]
-    fn nccl_process_group() {
+    fn init() {
         let tcp_opts = MyTCPStoreOptions {
             port: 8081,
             isServer: true,

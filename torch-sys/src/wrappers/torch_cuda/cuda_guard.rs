@@ -1,8 +1,7 @@
 pub mod cxx_wrappers;
-
-use crate::wrappers::torch_cuda::cuda_stream::CUDAStream;
-use cxx::UniquePtr;
 pub use cxx_wrappers::*;
+
+use cxx::UniquePtr;
 use std::pin::Pin;
 
 type CxxResult<T> = Result<T, cxx::Exception>;

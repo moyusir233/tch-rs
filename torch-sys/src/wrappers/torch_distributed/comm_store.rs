@@ -1,6 +1,8 @@
 pub use crate::wrappers::autocxx_wrappers::torch_distributed::comm_store::*;
 use autocxx::prelude::*;
 use cxx::UniquePtr;
+use std::ffi::CStr;
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::time::Duration;
@@ -28,6 +30,17 @@ impl Clone for MyTCPStoreOptions {
     }
 }
 
+impl Debug for ArcTCPStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArcTCPStore").finish()
+    }
+}
+
+/// 其底层使用了线程锁来保证操作正确,因此可以Send
+unsafe impl Send for ArcTCPStore {}
+/// 其底层使用了线程锁来保证操作正确,因此可以Send
+unsafe impl Send for ArcPrefixStore {}
+
 impl Store for ArcTCPStore {
     fn set_timeout(self: Pin<&mut Self>, timeout: Duration) {
         self.setTimeout((timeout.as_millis() as i64).into());
@@ -52,14 +65,21 @@ impl NestPrefixStore<ArcTCPStore> for ArcPrefixStore {
     }
 }
 
+impl ArcPrefixStore {
+    #[inline]
+    pub fn add(self: Pin<&mut Self>, key: &CStr, value: i64) -> i64 {
+        unsafe { self.ArcPrefixStore_add_(key.as_ptr(), value) }
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod store {
     use super::*;
-    use crate::wrappers::torch_distributed::comm_store::ToCppString;
+    use std::ffi::CString;
     use std::sync::Arc;
 
     #[test]
-    fn store() {
+    fn init() {
         fn create_prefix_store(host: &str, opts: &MyTCPStoreOptions) -> UniquePtr<ArcPrefixStore> {
             let mut tcp_store = ArcTCPStore::new(host, opts).within_unique_ptr();
             tcp_store.pin_mut().set_timeout(Duration::from_secs(100));
@@ -73,7 +93,9 @@ mod tests {
 
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let host = "localhost";
-        let key = "store_key";
+        let key = CString::new("store_key").unwrap();
+        let key = key.as_ref() as *const CStr;
+        let key: &'static CStr = unsafe { &*key };
 
         std::thread::spawn({
             let barrier = barrier.clone();
@@ -87,9 +109,9 @@ mod tests {
                     multiTenant: false,
                 };
                 let mut prefix_store = create_prefix_store(host, &tcp_store_opts);
-                prefix_store.pin_mut().add(&key.into_cpp(), 1);
+                prefix_store.pin_mut().add(key, 1);
                 barrier.wait();
-                assert_eq!(prefix_store.pin_mut().add(&key.into_cpp(), 0), 2);
+                assert_eq!(prefix_store.pin_mut().add(key, 0), 2);
             }
         });
 
@@ -102,8 +124,40 @@ mod tests {
             multiTenant: true,
         };
         let mut prefix_store = create_prefix_store(&host, &tcp_store_opts);
-        prefix_store.pin_mut().add(&key.into_cpp(), 1);
+        prefix_store.pin_mut().add(key, 1);
         barrier.wait();
-        assert_eq!(prefix_store.pin_mut().add(&key.into_cpp(), 0), 2);
+        assert_eq!(prefix_store.pin_mut().add(key, 0), 2);
+    }
+
+    #[test]
+    fn send_store() {
+        let tcp_store_opts = MyTCPStoreOptions {
+            port: 8080,
+            isServer: true,
+            numWorkers: 1,
+            timeout: 10000,
+            waitWorkers: true,
+            multiTenant: true,
+        };
+        let tcp_store = ArcTCPStore::new("localhost", &tcp_store_opts).within_unique_ptr();
+        std::thread::spawn(move || {
+            println!("{:?}", tcp_store);
+        })
+        .join()
+        .unwrap();
+
+        let tcp_store = std::thread::spawn(move || {
+            ArcTCPStore::new("localhost", &tcp_store_opts).within_unique_ptr()
+        })
+        .join()
+        .unwrap();
+        println!("{:?}", tcp_store);
+
+        let mut prefix_store = ArcPrefixStore::nest_store("prefix1".into(), tcp_store);
+        let key = CString::new("tmp").unwrap();
+        for i in 0..9 {
+            let value = prefix_store.pin_mut().add(&key, i % 2);
+            println!("{i}:{value}")
+        }
     }
 }

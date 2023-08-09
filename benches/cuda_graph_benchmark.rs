@@ -26,8 +26,8 @@ fn try_cuda_graph_bench(c: &mut Criterion) -> anyhow::Result<()> {
     let mut static_loss = tch::Tensor::empty([1, 1], (tch::Kind::Double, device));
 
     // warm up
-    use tch::cuda_guards::{CUDAStreamGuard, GuardScope};
-    use tch::cuda_stream::{CUDAStream, CUDAStreamExt};
+    use tch::torch_cuda::cuda_guards::{CUDAStreamGuard, GuardScope};
+    use tch::torch_cuda::cuda_stream::{CUDAStream, CUDAStreamExt};
     let capture_stream = CUDAStream::get_stream_from_pool(false, device.index() as i8)?;
     {
         capture_stream.wait_stream(
@@ -51,7 +51,7 @@ fn try_cuda_graph_bench(c: &mut Criterion) -> anyhow::Result<()> {
     let mut group = c.benchmark_group("cuda_graph_bench");
     group.sample_size(10);
 
-    use tch::cuda_graph::{CUDAGraph, CUDAGraphExt};
+    use tch::torch_cuda::cuda_graph::{CUDAGraph, CUDAGraphExt};
     {
         let mut graph = CUDAGraph::new();
 
