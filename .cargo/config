@@ -1,13 +1,17 @@
+[build]
+# 默认使用lld加快链接
+rustflags = ["-C", "link-arg=-fuse-ld=lld-16"]
+
 [target.'cfg(all(not(feature="lto"),target_os="linux"))']
 rustflags = ["-C", "link-arg=-Wl,--allow-shlib-undefined"]
 
 [target.'cfg(all(feature="lto",target_os="linux"))']
 rustflags = [
     "-C", "link-arg=-Wl,--allow-shlib-undefined",
-    "-Clinker=clang-16",
-    "-Clto",
-    "-Clinker-plugin-lto",
-    "-Clink-arg=-fuse-ld=lld-16"]
+    "-C", "lto",
+    "-C", "linker=clang-16",
+    "-C", "linker-plugin-lto"
+]
 
 [env]
 # 使用python版本编译好的libtorch

@@ -399,15 +399,15 @@ impl TchCmakeBuilder {
 
         const CMAKE_LIST_SPLIT: &str = ";";
         // 设置表示是rust侧发起的编译的flag
-        cmake_config.define("CARGO_BUILD", "");
+        cmake_config.define("CARGO_BUILD", "ON");
         // 表示进行测试
         if cfg!(test) {
-            cmake_config.define("CARGO_TEST", "");
+            cmake_config.define("CARGO_TEST", "ON");
         }
         // 表示进行链接时优化lto
         #[cfg(feature = "lto")]
         {
-            cmake_config.define("CARGO_LTO", "");
+            cmake_config.define("CARGO_LTO", "ON");
         }
         // 设置lib名称
         cmake_config.define("CARGO_CXX_LIB_NAME", lib_name);
@@ -423,7 +423,7 @@ impl TchCmakeBuilder {
         cmake_config.define("CARGO_CXX_SRC", join_pathbufs(&self.src, CMAKE_LIST_SPLIT));
         // 传递使用cuda的选项并设置cuda头文件目录
         if use_cuda || use_hip {
-            cmake_config.define("CARGO_USE_CUDA", "");
+            cmake_config.define("CARGO_USE_CUDA", "ON");
             cmake_config.define(
                 "CARGO_CUDA_INCLUDE_DIRS",
                 join_pathbufs(&self.cuda_include_dirs, CMAKE_LIST_SPLIT),

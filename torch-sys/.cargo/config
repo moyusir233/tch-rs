@@ -1,6 +1,10 @@
-[target.'cfg(feature="lto")']
+[build]
+# 默认使用lld加快链接
+rustflags = ["-C", "link-arg=-fuse-ld=lld-16"]
+
+[target.'cfg(all(feature="lto",target_os="linux"))']
 rustflags = [
-    "-Clto",
-    "-Clinker=clang-16",
-    "-Clinker-plugin-lto",
-    "-Clink-arg=-fuse-ld=lld-16"]
+    "-C", "lto",
+    "-C", "linker=clang-16",
+    "-C", "linker-plugin-lto"
+]

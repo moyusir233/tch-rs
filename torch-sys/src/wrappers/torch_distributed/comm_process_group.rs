@@ -55,7 +55,7 @@ impl Clone for ProcessGroupNCCLOptions {
 #[cfg(test)]
 mod nccl_process_group {
     use super::*;
-    use crate::wrappers::torch_distributed::comm_store::MyTCPStoreOptions;
+    use crate::wrappers::torch_distributed::comm_store::{MyTCPStoreOptions, NestPrefixStore};
 
     #[test]
     fn init() {

@@ -1,16 +1,20 @@
 cmake_minimum_required(VERSION 3.9 FATAL_ERROR)
 
-if (DEFINED CARGO_LTO)
-    # 使用clang编译以启用rust跨语言的lto
-    # (注:这里使用的是clang-10,以编译cuda相关文件,但rust那边是使用的llvm-16即
-    # 应对应clang-16,但没有报错)
-    set(CMAKE_C_COMPILER "/usr/bin/clang")
-    set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
-endif ()
+include(CMakeDependentOption)
+option(CARGO_BUILD "build with cargo" OFF)
+CMAKE_DEPENDENT_OPTION(CARGO_LTO "compile with link time optimization" OFF "CARGO_BUILD" OFF)
+CMAKE_DEPENDENT_OPTION(CARGO_TEST "build with cargo test" OFF "CARGO_BUILD" OFF)
+CMAKE_DEPENDENT_OPTION(USE_CUDA "enable cuda" ON "CARGO_BUILD" ON)
+
+# 使用clang编译以启用rust跨语言的lto
+# (注:这里使用的是clang-10,以编译cuda相关文件,但rust那边是使用的llvm-16即
+# 应对应clang-16,但没有报错)
+set(CMAKE_C_COMPILER "/usr/bin/clang")
+set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
 
 project(tch)
 
-if (DEFINED CARGO_LTO)
+if (CARGO_LTO)
     include(CheckIPOSupported)
     check_ipo_supported()
 endif ()
@@ -21,7 +25,7 @@ set(CMAKE_CXX_STANDARD 14)
 # 关闭警告
 add_definitions(-w)
 
-if (DEFINED CARGO_BUILD)
+if (CARGO_BUILD)
     # 库名称
     set(lib_name "${CARGO_CXX_LIB_NAME}")
     # 编译选项
@@ -34,7 +38,7 @@ if (DEFINED CARGO_BUILD)
     set(src "${CARGO_CXX_SRC}")
     # cuda头文件目录
     if (DEFINED CARGO_USE_CUDA)
-        set(USE_CUDA "")
+        set(USE_CUDA ON)
         set(CUDA_INCLUDE_DIRS "${CARGO_CUDA_INCLUDE_DIRS}")
     endif ()
     # libtorch cmake文件目录
@@ -62,17 +66,12 @@ else ()
 
     # 默认为src目录下的所有文件以及cargo OUT_DIR目录下的cxx源文件
     file(GLOB_RECURSE src "${CMAKE_SOURCE_DIR}/src/*" "${CARGO_OUT_DIR}/cxxbridge/torch-sys/src/cxx_wrapper/*.cc")
-    message("src: ${src}")
     # 过滤掉fake的cuda文件
     list(FILTER src EXCLUDE REGEX ".*fake_cuda_dependency.cpp$")
     list(FILTER src EXCLUDE REGEX ".*torch_python.cpp$")
 
     # 默认启用cuda,且使用本地的cuda头文件
-    set(USE_CUDA "")
     set(CUDA_INCLUDE_DIRS "/usr/local/cuda")
-
-    # 默认开启测试
-    set(CARGO_TEST "")
 endif ()
 
 # Finds the Torch library
@@ -85,19 +84,21 @@ endif ()
 #   TORCH_CXX_FLAGS    -- Additional (required) compiler flags
 find_package(Torch REQUIRED)
 
-# 导入pytorch和cuda相关的头文件
-if (DEFINED USE_CUDA)
+if (USE_CUDA)
+    # 导入cuda相关的头文件
     include_directories("${CUDA_INCLUDE_DIRS}")
 endif ()
-message("include dirs:${TORCH_INCLUDE_DIRS}")
+
+# 导入libtorch头文件
 include_directories("${TORCH_INCLUDE_DIRS}")
 
 # 导入自定义的头文件
 include_directories("${header_dirs}")
 
+# 创建动态库
 add_library("${lib_name}" SHARED "${src}")
 
-if (DEFINED CARGO_LTO)
+if (CARGO_LTO)
     # 开启lto所需的编译与链接选项
     list(APPEND compile_flags "-flto=thin")
     list(APPEND compile_flags "-v")
@@ -108,9 +109,10 @@ if (DEFINED CARGO_LTO)
 endif ()
 
 # 添加编译选项与链接选项
-list(JOIN link_flags " " link_flags)
-target_compile_options("${lib_name}" PRIVATE "${compile_flags}")
-set_target_properties("${lib_name}" PROPERTIES LINK_FLAGS "${link_flags}")
+#list(JOIN link_flags " " link_flags)
+target_compile_options("${lib_name}" PUBLIC "${compile_flags}")
+target_link_options("${lib_name}" PUBLIC "${link_flags}")
+#set_target_properties("${lib_name}" PROPERTIES LINK_FLAGS "${link_flags}")
 
 target_link_libraries("${lib_name}" "${TORCH_LIBRARIES}")
 install(TARGETS "${lib_name}" DESTINATION .)
