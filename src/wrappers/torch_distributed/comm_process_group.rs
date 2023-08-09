@@ -1,12 +1,16 @@
+use crate::error::TchResult;
+use crate::{TchError, Tensor};
 use autocxx::WithinUniquePtr;
 use cxx::UniquePtr;
 use std::ffi::CString;
+use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 pub use torch_sys::wrappers::torch_distributed::comm_process_group::*;
 use torch_sys::wrappers::torch_distributed::comm_store::{
     MyTCPStoreOptions, NestPrefixStore, Store,
 };
+use torch_sys::C_tensor;
 
 pub trait ProcessGroupExt {
     /// 基于tcp store来初始化nccl通信进程组
@@ -18,6 +22,10 @@ pub trait ProcessGroupExt {
         rank: usize,
         opts: Option<ProcessGroupNCCLOptions>,
     ) -> UniquePtr<ArcProcessGroupNCCL>;
+
+    /// 广播集合通信操作,src为进行广播的rank
+    async fn broadcast(self: Pin<&mut Self>, tensor: &mut Tensor, src_rank: usize)
+        -> TchResult<()>;
 }
 
 async fn _store_based_barrier(
@@ -37,8 +45,11 @@ async fn _store_based_barrier(
 
     loop {
         interval.tick().await;
-        if store.pin_mut().add(store_key, 0) == world_size as i64 {
-            break;
+        use std::cmp::Ordering;
+        match store.pin_mut().add(store_key, 0).cmp(&(world_size as i64)) {
+            Ordering::Equal => break,
+            Ordering::Greater => panic!("Sync count greater than the world_size!"),
+            Ordering::Less => (),
         }
         if start.elapsed() >= timeout {
             panic!("store barrier is timeout!");
@@ -113,42 +124,126 @@ impl ProcessGroupExt for ArcProcessGroupNCCL {
         )
         .await;
 
+        // TODO 利用一次伪的broadcast操作触发底层nccl comm的创建以及其他阻塞的同步操作
+
         process_group
+    }
+
+    async fn broadcast(
+        self: Pin<&mut Self>,
+        tensor: &mut Tensor,
+        src_rank: usize,
+    ) -> TchResult<()> {
+        let mut work =
+            unsafe { self.broadcast(tensor.c_tensor as *mut C_tensor, (src_rank as i32).into()) }
+                .within_unique_ptr();
+
+        // TODO 也许有更好地阻塞的手段
+        tokio::task::spawn_blocking(move || {
+            if !work.pin_mut().wait() {
+                Err(TchError::Communication(work.pin_mut().exception().to_string()))
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .map_err(|err| {
+            TchError::Communication(format!(
+                "failed to join the blocking task's handler,err: {err}"
+            ))
+        })?
     }
 }
 
 #[cfg(test)]
 mod nccl_process_group {
     use super::*;
+    use anyhow::Context;
     use std::str::FromStr;
     use std::sync::Arc;
 
+    async fn create_process_group<const WORLD_SIZE: usize>(
+        group_name: &'static str,
+        address: &str,
+    ) -> [UniquePtr<ArcProcessGroupNCCL>; WORLD_SIZE] {
+        let local_set = tokio::task::LocalSet::new();
+        let mut handlers = Vec::with_capacity(WORLD_SIZE);
+
+        let address = std::net::SocketAddr::from_str(address).unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(WORLD_SIZE));
+
+        for i in 0..WORLD_SIZE {
+            let handler = local_set.spawn_local({
+                let barrier = barrier.clone();
+                let address = address.clone();
+                async move {
+                    let process_group = ArcProcessGroupNCCL::new_with_tcp_store(
+                        group_name, address, None, WORLD_SIZE, i, None,
+                    )
+                    .await;
+                    barrier.wait().await;
+                    process_group
+                }
+            });
+            handlers.push(handler);
+        }
+        local_set.await;
+
+        let mut process_groups: [_; WORLD_SIZE] = std::array::from_fn(|_| UniquePtr::null());
+        for (i, handler) in handlers.into_iter().enumerate() {
+            process_groups[i] = handler.await.unwrap();
+        }
+
+        process_groups
+    }
+
     #[tokio::test]
     async fn init() {
-        let local_set = tokio::task::LocalSet::new();
-        local_set
-            .run_until(async {
-                let group_name = "nccl_process_group_test";
-                let address = std::net::SocketAddr::from_str("127.0.0.1:8080").unwrap();
-                let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        create_process_group::<3>("init_test", "127.0.0.1:8081").await;
+        create_process_group::<4>("init_test", "127.0.0.1:8081").await;
+        create_process_group::<5>("init_test", "127.0.0.1:8081").await;
+    }
 
-                tokio::task::spawn_local({
-                    let barrier = barrier.clone();
-                    let address = address.clone();
-                    async move {
-                        let _client = ArcProcessGroupNCCL::new_with_tcp_store(
-                            group_name, address, None, 2, 1, None,
-                        )
-                        .await;
-                        barrier.wait().await;
-                    }
-                });
+    // FIXME 修复第一次进行集合通信操作时底层进行的额外同步操作而导致阻塞的问题
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn broadcast() -> anyhow::Result<()> {
+        let device = crate::Device::Cuda(0);
+        let world_size = 2;
 
-                let _master =
-                    ArcProcessGroupNCCL::new_with_tcp_store(group_name, address, None, 2, 0, None)
-                        .await;
-                barrier.wait().await;
-            })
-            .await;
+        let mut src_tensor = crate::Tensor::rand([5, 5], (crate::Kind::Float, device));
+        let mut dst_tensors: Vec<_> =
+            std::iter::repeat_with(|| crate::Tensor::zeros([5, 5], (crate::Kind::Float, device)))
+                .into_iter()
+                .take(world_size - 1)
+                .collect();
+
+        let mut groups = create_process_group::<2>("broadcast_test", "127.0.0.1:8080").await;
+        let mut join_set = tokio::task::JoinSet::new();
+
+        for (i, mut group) in groups.into_iter().enumerate() {
+            let mut tensor = if i == 0 {
+                src_tensor.shallow_clone()
+            } else {
+                dst_tensors[i - 1].shallow_clone()
+            };
+            join_set.spawn(async move {
+                ProcessGroupExt::broadcast(group.pin_mut(), &mut tensor, 0).await
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            result.context("failed to join the task")?.context("failed to broadcast")?;
+        }
+
+        for dst_tensor in dst_tensors {
+            assert!(
+                src_tensor.equal(&dst_tensor),
+                "dst tensor is different with src tensor!\nsrc:{},dst:{}",
+                src_tensor,
+                dst_tensor
+            );
+        }
+
+        Ok(())
     }
 }

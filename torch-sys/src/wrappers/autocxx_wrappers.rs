@@ -1,3 +1,9 @@
+/// 让与tch已有的binding类型与cxx体系兼容
+unsafe impl cxx::ExternType for crate::C_tensor {
+    type Id = cxx::type_id!("at::Tensor");
+    type Kind = cxx::kind::Opaque;
+}
+
 pub mod torch_distributed {
 
     /// 定义实例化进程组时所需要的一系列kv store,可见文档:
@@ -26,8 +32,10 @@ pub mod torch_distributed {
             name!(ffi2)
             safety!(unsafe_ffi)
             generate_pod!("c10d::ProcessGroupNCCLOptions")
+            extern_cpp_opaque_type!("at::Tensor",crate::C_tensor)
             extern_cpp_opaque_type!("c10d::ArcTCPStore",crate::wrappers::autocxx_wrappers::torch_distributed::comm_store::ArcTCPStore)
             extern_cpp_opaque_type!("c10d::ArcPrefixStore",crate::wrappers::autocxx_wrappers::torch_distributed::comm_store::ArcPrefixStore)
+            generate!("c10d::ArcWork")
             generate!("c10d::ArcProcessGroupNCCL")
         }
 

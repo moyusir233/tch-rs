@@ -52,6 +52,9 @@ impl Clone for ProcessGroupNCCLOptions {
     }
 }
 
+unsafe impl Send for ArcWork {}
+unsafe impl Send for ArcProcessGroupNCCL {}
+
 #[cfg(test)]
 mod nccl_process_group {
     use super::*;
