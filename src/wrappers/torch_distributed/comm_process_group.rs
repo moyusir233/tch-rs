@@ -10,7 +10,7 @@ use torch_sys::wrappers::torch_distributed::comm_store::{
 
 pub trait ProcessGroupExt {
     /// 基于tcp store来初始化nccl通信进程组
-    fn new_with_tcp_store(
+    async fn new_with_tcp_store(
         group_name: &str,
         address: std::net::SocketAddr,
         timeout: Option<Duration>,
@@ -20,7 +20,7 @@ pub trait ProcessGroupExt {
     ) -> UniquePtr<ArcProcessGroupNCCL>;
 }
 
-fn _store_based_barrier(
+async fn _store_based_barrier(
     store: &mut UniquePtr<ArcPrefixStore>,
     world_size: usize,
     timeout: Duration,
@@ -33,9 +33,10 @@ fn _store_based_barrier(
 
     let start = std::time::Instant::now();
     let check_interval = Duration::from_millis(10);
+    let mut interval = tokio::time::interval(check_interval);
 
     loop {
-        std::thread::sleep(check_interval);
+        interval.tick().await;
         if store.pin_mut().add(store_key, 0) == world_size as i64 {
             break;
         }
@@ -47,7 +48,7 @@ fn _store_based_barrier(
 
 impl ProcessGroupExt for ArcProcessGroupNCCL {
     /// 创建复用的tcp store,然后创建process group
-    fn new_with_tcp_store(
+    async fn new_with_tcp_store(
         group_name: &str,
         address: std::net::SocketAddr,
         timeout: Option<Duration>,
@@ -83,8 +84,12 @@ impl ProcessGroupExt for ArcProcessGroupNCCL {
 
         let mut prefix_store = {
             // tcp store的创建是阻塞的,因此需要在blocking线程上完成
-            let tcp_store =
-                ArcTCPStore::new(address.ip().to_string(), &tcp_opts).within_unique_ptr();
+            let tcp_store = tokio::task::spawn_blocking({
+                let tcp_opts = tcp_opts.clone();
+                move || ArcTCPStore::new(address.ip().to_string(), &tcp_opts).within_unique_ptr()
+            })
+            .await
+            .unwrap();
 
             let mut prefix_store = ArcPrefixStore::nest_store(group_name.into(), tcp_store);
             prefix_store.pin_mut().set_timeout(Duration::from_millis(tcp_opts.timeout as u64));
@@ -105,7 +110,8 @@ impl ProcessGroupExt for ArcProcessGroupNCCL {
             &mut prefix_store,
             world_size,
             Duration::from_millis(tcp_opts.timeout as u64),
-        );
+        )
+        .await;
 
         process_group
     }
@@ -117,40 +123,32 @@ mod nccl_process_group {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    #[test]
-    fn init() {
-        let group_name = "nccl_process_group_test";
-        let address = std::net::SocketAddr::from_str("127.0.0.1:8080").unwrap();
+    #[tokio::test]
+    async fn init() {
+        let local_set = tokio::task::LocalSet::new();
+        local_set
+            .run_until(async {
+                let group_name = "nccl_process_group_test";
+                let address = std::net::SocketAddr::from_str("127.0.0.1:8080").unwrap();
+                let barrier = Arc::new(tokio::sync::Barrier::new(2));
 
-        std::thread::scope(|s| {
-            let barrier = Arc::new(std::sync::Barrier::new(2));
+                tokio::task::spawn_local({
+                    let barrier = barrier.clone();
+                    let address = address.clone();
+                    async move {
+                        let _client = ArcProcessGroupNCCL::new_with_tcp_store(
+                            group_name, address, None, 2, 1, None,
+                        )
+                        .await;
+                        barrier.wait().await;
+                    }
+                });
 
-            s.spawn({
-                let barrier = barrier.clone();
-                move || {
-                    let _client = ArcProcessGroupNCCL::new_with_tcp_store(
-                        group_name,
-                        address.clone(),
-                        None,
-                        2,
-                        1,
-                        None,
-                    );
-                    barrier.wait();
-                }
-            });
-
-            s.spawn(move || {
-                let _master = ArcProcessGroupNCCL::new_with_tcp_store(
-                    group_name,
-                    address.clone(),
-                    None,
-                    2,
-                    0,
-                    None,
-                );
-                barrier.wait();
-            });
-        });
+                let _master =
+                    ArcProcessGroupNCCL::new_with_tcp_store(group_name, address, None, 2, 0, None)
+                        .await;
+                barrier.wait().await;
+            })
+            .await;
     }
 }
