@@ -10,6 +10,7 @@
 	],
 	"appPort": "2222:2222",
 	"features": {
+		"./init-my-dev-env": {},
 		"ghcr.io/devcontainers/features/rust:1": {
 			"profile": "default"
 		},
