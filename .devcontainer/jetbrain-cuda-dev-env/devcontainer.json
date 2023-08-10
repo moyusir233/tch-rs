@@ -10,12 +10,8 @@
 	],
 	"appPort": "2222:2222",
 	"features": {
-		"./init-my-dev-env": {},
-		"ghcr.io/devcontainers/features/rust:1": {
-			"profile": "default"
-		},
-		"ghcr.io/devcontainers/features/git:1": {},
-		"ghcr.io/devcontainers/features/sshd:1": {}
+		"ghcr.io/devcontainers/features/sshd:1": {},
+		"./init-my-dev-env": {}
 	},
 	"hostRequirements": {
 		"gpu": true

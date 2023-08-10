@@ -9,8 +9,8 @@ CMAKE_DEPENDENT_OPTION(USE_CUDA "enable cuda" ON "CARGO_BUILD" ON)
 # 使用clang编译以启用rust跨语言的lto
 # (注:这里使用的是clang-10,以编译cuda相关文件,但rust那边是使用的llvm-16即
 # 应对应clang-16,但没有报错)
-set(CMAKE_C_COMPILER "/usr/bin/clang")
-set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
+set(CMAKE_C_COMPILER "/usr/bin/clang-12")
+set(CMAKE_CXX_COMPILER "/usr/bin/clang++-12")
 
 project(tch)
 
@@ -104,7 +104,7 @@ if (CARGO_LTO)
     list(APPEND compile_flags "-v")
     list(APPEND link_flags "-flto=thin")
     list(APPEND link_flags "-v")
-    list(APPEND link_flags "-fuse-ld=lld")
+    list(APPEND link_flags "-fuse-ld=lld-12")
     set_property(TARGET ${lib_name} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif ()
 
