@@ -1,4 +1,5 @@
 pub use crate::wrappers::autocxx_wrappers::torch_distributed::comm_store::*;
+use crate::wrappers::utils::CppArcClone;
 use autocxx::prelude::*;
 use cxx::UniquePtr;
 use std::ffi::CStr;
@@ -15,7 +16,43 @@ pub trait NestPrefixStore<S: Store + cxx::memory::UniquePtrTarget> {
     fn nest_store(prefix: String, store: UniquePtr<S>) -> UniquePtr<ArcPrefixStore>;
 }
 
+impl Store for ArcTCPStore {
+    #[inline]
+    fn set_timeout(self: Pin<&mut Self>, timeout: Duration) {
+        self.ArcTCPStore_set_timeout_((timeout.as_millis() as i64).into())
+    }
+}
+
+impl Store for ArcPrefixStore {
+    #[inline]
+    fn set_timeout(self: Pin<&mut Self>, timeout: Duration) {
+        self.ArcPrefixStore_set_timeout_((timeout.as_millis() as i64).into());
+    }
+}
+
+impl NestPrefixStore<ArcPrefixStore> for ArcPrefixStore {
+    #[inline]
+    fn nest_store(prefix: String, store: UniquePtr<ArcPrefixStore>) -> UniquePtr<ArcPrefixStore> {
+        ArcPrefixStore::new2(prefix, store).within_unique_ptr()
+    }
+}
+
+impl NestPrefixStore<ArcTCPStore> for ArcPrefixStore {
+    #[inline]
+    fn nest_store(prefix: String, store: UniquePtr<ArcTCPStore>) -> UniquePtr<ArcPrefixStore> {
+        ArcPrefixStore::new1(prefix, store).within_unique_ptr()
+    }
+}
+
+impl ArcPrefixStore {
+    #[inline]
+    pub fn add(self: Pin<&mut Self>, key: &CStr, value: i64) -> i64 {
+        unsafe { self.ArcPrefixStore_add_(key.as_ptr(), value) }
+    }
+}
+
 impl Default for MyTCPStoreOptions {
+    #[inline]
     fn default() -> Self {
         moveit! {
             let default_opts=Self::new();
@@ -25,12 +62,14 @@ impl Default for MyTCPStoreOptions {
 }
 
 impl Clone for MyTCPStoreOptions {
+    #[inline]
     fn clone(&self) -> Self {
         Self { ..*self }
     }
 }
 
 impl Debug for ArcTCPStore {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArcTCPStore").finish()
     }
@@ -41,34 +80,10 @@ unsafe impl Send for ArcTCPStore {}
 /// 其底层使用了线程锁来保证操作正确,因此可以Send
 unsafe impl Send for ArcPrefixStore {}
 
-impl Store for ArcTCPStore {
-    fn set_timeout(self: Pin<&mut Self>, timeout: Duration) {
-        self.setTimeout((timeout.as_millis() as i64).into());
-    }
-}
-
-impl Store for ArcPrefixStore {
-    fn set_timeout(self: Pin<&mut Self>, timeout: Duration) {
-        self.setTimeout((timeout.as_millis() as i64).into());
-    }
-}
-
-impl NestPrefixStore<ArcPrefixStore> for ArcPrefixStore {
-    fn nest_store(prefix: String, store: UniquePtr<ArcPrefixStore>) -> UniquePtr<ArcPrefixStore> {
-        ArcPrefixStore::new2(prefix, store).within_unique_ptr()
-    }
-}
-
-impl NestPrefixStore<ArcTCPStore> for ArcPrefixStore {
-    fn nest_store(prefix: String, store: UniquePtr<ArcTCPStore>) -> UniquePtr<ArcPrefixStore> {
-        ArcPrefixStore::new1(prefix, store).within_unique_ptr()
-    }
-}
-
-impl ArcPrefixStore {
+impl CppArcClone for ArcPrefixStore {
     #[inline]
-    pub fn add(self: Pin<&mut Self>, key: &CStr, value: i64) -> i64 {
-        unsafe { self.ArcPrefixStore_add_(key.as_ptr(), value) }
+    fn arc_clone(&self) -> UniquePtr<Self> {
+        self.ArcPrefixStore_clone_().within_unique_ptr()
     }
 }
 
@@ -123,7 +138,7 @@ mod store {
             timeout: 10000,
             multiTenant: true,
         };
-        let mut prefix_store = create_prefix_store(&host, &tcp_store_opts);
+        let mut prefix_store = create_prefix_store(host, &tcp_store_opts);
         prefix_store.pin_mut().add(key, 1);
         barrier.wait();
         assert_eq!(prefix_store.pin_mut().add(key, 0), 2);

@@ -1,28 +1,8 @@
 use autocxx::prelude::*;
 use cxx::memory::UniquePtrTarget;
-use std::pin::Pin;
 
-pub trait CxxClone: UniquePtrTarget + Sized {
-    /// 在c++一侧的堆上创建clone的新实例
-    fn clone_on_cpp_heap(&self) -> UniquePtr<Self>;
-    /// 在rust一侧的堆上创建clone的新实例
-    fn clone_on_rust_heap(&self) -> Pin<Box<Self>>;
-}
-
-#[macro_use]
-pub mod macros {
-    #[allow(unused_macros)]
-    macro_rules! impl_cxx_clone {
-        ($t:path) => {
-            impl $crate::autocxx_wrapper::utils::CxxClone for $t {
-                fn clone_on_cpp_heap(&self) -> UniquePtr<Self> {
-                    self.clone().within_unique_ptr()
-                }
-
-                fn clone_on_rust_heap(&self) -> Pin<Box<Self>> {
-                    self.clone().within_box()
-                }
-            }
-        };
-    }
+/// 表示具有`std::sync::Arc`语义的cxx wrapper类型
+pub trait CppArcClone: UniquePtrTarget + Sized + Send {
+    /// 类似rust中`Arc::clone`的语义,不过是通过c++一侧相关的智能指针实现的
+    fn arc_clone(&self) -> UniquePtr<Self>;
 }

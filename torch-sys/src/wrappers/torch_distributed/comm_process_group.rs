@@ -3,8 +3,6 @@ use crate::wrappers::torch_distributed::comm_store::Store;
 use autocxx::prelude::*;
 use cxx::UniquePtr;
 use std::ops::Deref;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 pub trait FromStore<S: Store + cxx::memory::UniquePtrTarget> {
     fn from_store(
@@ -18,8 +16,21 @@ pub trait FromStore<S: Store + cxx::memory::UniquePtrTarget> {
 }
 
 impl FromStore<ArcTCPStore> for ArcProcessGroupNCCL {
+    #[inline]
     fn from_store(
         store: &ArcTCPStore,
+        rank: i32,
+        size: i32,
+        options: ProcessGroupNCCLOptions,
+    ) -> UniquePtr<Self> {
+        ArcProcessGroupNCCL::new2(store, rank.into(), size.into(), options).within_unique_ptr()
+    }
+}
+
+impl FromStore<ArcPrefixStore> for ArcProcessGroupNCCL {
+    #[inline]
+    fn from_store(
+        store: &ArcPrefixStore,
         rank: i32,
         size: i32,
         options: ProcessGroupNCCLOptions,
@@ -28,18 +39,8 @@ impl FromStore<ArcTCPStore> for ArcProcessGroupNCCL {
     }
 }
 
-impl FromStore<ArcPrefixStore> for ArcProcessGroupNCCL {
-    fn from_store(
-        store: &ArcPrefixStore,
-        rank: i32,
-        size: i32,
-        options: ProcessGroupNCCLOptions,
-    ) -> UniquePtr<Self> {
-        ArcProcessGroupNCCL::new(store, rank.into(), size.into(), options).within_unique_ptr()
-    }
-}
-
 impl Default for ProcessGroupNCCLOptions {
+    #[inline]
     fn default() -> Self {
         moveit! {
             let default_opts=Self::new();
@@ -49,11 +50,11 @@ impl Default for ProcessGroupNCCLOptions {
 }
 
 impl Clone for ProcessGroupNCCLOptions {
+    #[inline]
     fn clone(&self) -> Self {
         Self { ..*self }
     }
 }
-
 
 unsafe impl Send for ArcWork {}
 unsafe impl Send for ArcProcessGroupNCCL {}
