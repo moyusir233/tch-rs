@@ -1,7 +1,6 @@
 use crate::error::TchResult;
-use crate::wrappers::torch_distributed::utils::CxxIntoFuture;
+use crate::wrappers::cxx_wrappers_utils::CppArc;
 use crate::{TchError, Tensor};
-use anyhow::Context;
 use autocxx::WithinUniquePtr;
 use cxx::UniquePtr;
 use std::ffi::CString;
@@ -14,28 +13,24 @@ use torch_sys::wrappers::torch_distributed::comm_store::{
 };
 use torch_sys::C_tensor;
 
-impl CxxIntoFuture for ArcWork {
-    type Output = TchResult<()>;
-    type IntoFuture = impl std::future::Future<Output = Self::Output>;
+pub type ProcessGroupNCCL = CppArc<ArcProcessGroupNCCL>;
 
-    fn into_future(mut unique_ptr: UniquePtr<Self>) -> Self::IntoFuture {
-        // TODO 也许有更好地阻塞的手段
-        async move {
-            tokio::task::spawn_blocking(move || {
-                if !unique_ptr.pin_mut().wait() {
-                    Err(TchError::Communication(unique_ptr.pin_mut().exception().to_string()))
-                } else {
-                    Ok(())
-                }
-            })
-            .await
-            .map_err(|err| {
-                TchError::Communication(format!(
-                    "failed to join the blocking task's handler,err: {err}"
-                ))
-            })?
-        }
+impl ProcessGroupNCCL {
+    pub async fn new(
+        group_name: &str,
+        address: std::net::SocketAddr,
+        timeout: Option<Duration>,
+        world_size: usize,
+        rank: usize,
+        opts: Option<ProcessGroupNCCLOptions>,
+    ) -> Self {
+        todo!()
     }
+
+    pub async fn broadcast(&mut self, tensor: &mut Tensor, src_rank: usize){
+        todo!()
+    }
+
 }
 
 pub trait ProcessGroupExt {

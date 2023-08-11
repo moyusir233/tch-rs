@@ -1,5 +1,5 @@
 pub use crate::wrappers::autocxx_wrappers::torch_distributed::comm_process_group::*;
-use crate::wrappers::torch_distributed::comm_store::Store;
+use crate::wrappers::{torch_distributed::comm_store::Store, utils::CppArcClone};
 use autocxx::prelude::*;
 use cxx::UniquePtr;
 use std::ops::Deref;
@@ -58,6 +58,20 @@ impl Clone for ProcessGroupNCCLOptions {
 
 unsafe impl Send for ArcWork {}
 unsafe impl Send for ArcProcessGroupNCCL {}
+
+impl CppArcClone for ArcProcessGroupNCCL {
+    #[inline]
+    fn arc_clone(&self) -> UniquePtr<Self> {
+        self.ArcProcessGroupNCCL_clone_().within_unique_ptr()
+    }
+}
+
+impl CppArcClone for ArcWork {
+    #[inline]
+    fn arc_clone(&self) -> UniquePtr<Self> {
+        self.ArcWork_clone_().within_unique_ptr()
+    }
+}
 
 #[cfg(test)]
 mod nccl_process_group {

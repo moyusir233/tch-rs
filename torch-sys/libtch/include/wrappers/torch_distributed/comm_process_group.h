@@ -21,9 +21,15 @@ namespace c10d {
 CREATE_CONTAINER_CLASS(_ArcWork, Work)
 
 class ArcWork : public _ArcWork {
+private:
+  explicit ArcWork(const c10::intrusive_ptr<Work> &work)
+      : _ArcWork(c10::intrusive_ptr<Work>(work)) {}
+
 public:
   explicit ArcWork(c10::intrusive_ptr<Work> &&work)
       : _ArcWork(std::forward<c10::intrusive_ptr<Work>>(work)) {}
+
+  ArcWork clone_() const { return ArcWork(inner); }
 
   // Checks if request has completed. Non-blocking operation.
   bool is_completed() { return inner->isCompleted(); }
@@ -117,7 +123,7 @@ class ArcProcessGroupNCCL : public _ArcProcessGroupNCCL {
 private:
   // 用于实现clone的构造函数
   explicit ArcProcessGroupNCCL(
-      c10::intrusive_ptr<ProcessGroupNCCL> &process_group)
+      const c10::intrusive_ptr<ProcessGroupNCCL> &process_group)
       : _ArcProcessGroupNCCL(
             c10::intrusive_ptr<ProcessGroupNCCL>(process_group)) {}
 
@@ -136,7 +142,7 @@ public:
             store.inner, rank, size,
             (c10::intrusive_ptr<ProcessGroupNCCL::Options>)options)) {}
 
-  ArcProcessGroupNCCL clone_() { return ArcProcessGroupNCCL(inner); }
+  ArcProcessGroupNCCL clone_() const { return ArcProcessGroupNCCL(inner); }
 
   void set_sequence_number_for_group() { inner->setSequenceNumberForGroup(); }
 
