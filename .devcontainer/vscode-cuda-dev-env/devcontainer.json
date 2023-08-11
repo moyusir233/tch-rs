@@ -9,10 +9,7 @@
 		"--ipc=host"
 	],
 	"features": {
-		"ghcr.io/devcontainers/features/rust:1": {
-			"profile": "default"
-		},
-		"ghcr.io/devcontainers/features/git:1": {}
+		"./init-my-dev-env": {}
 	},
 	"hostRequirements": {
 		"gpu": true
@@ -22,7 +19,9 @@
 		// c++以及开发相关的插件,rust相关的插件已通过上面的feature进行了添加
 		"vscode": {
 			"extensions": [
-				"ms-vscode.cpptools-extension-pack",
+				"rust-lang.rust-analyzer",
+				"llvm-vs-code-extensions.vscode-clangd",
+				"ms-vscode.cmake-tools",
 				"go2sh.cmake-integration-vscode",
 				"albert.TabOut",
 				"redjue.git-commit-plugin",

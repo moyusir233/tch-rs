@@ -17,15 +17,25 @@ deb-src https://mirrors.aliyun.com/ubuntu/ focal-backports main restricted unive
 EOF
 apt update -y
 
+# 避免安装包时时区的设置阻塞dev容器的启动
 DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt -y install tzdata
+
+# 配置llvm镜像源
 apt install -y wget curl git
+git config --global user.name moyu
+git config --global user.email 279972161@qq.com
+
 wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
 cat <<'EOF' > /etc/apt/sources.list.d/llvm-apt.list
 deb https://mirrors.cernet.edu.cn/llvm-apt/focal/ llvm-toolchain-focal-16 main
 EOF
+
+# 安装编译tch-rs所需的llvm相关工具链
 apt update -y
-# 安装clang与lld
-apt install -y clang-12 lld-12 clang-16 lld-16 
+# 安装clang与lld,以及clangd插件所需要的clangd lsp server
+apt install -y clang-12 clangd-12 lld-12 clang-16 lld-16 
+# 设置clangd-12为默认可执行的clangd
+update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-12 100
 
 cat >>/root/.bashrc <<EOF
 if [ -e "/root/.cargo/env" ]; then
@@ -36,24 +46,3 @@ else
     curl --proto '=https' --tlsv1.2 -sSf https://rsproxy.cn/rustup-init.sh | sh
 fi
 EOF
-
-# 安装ssh
-apt install -y openssh-server openssh-client
-# ssh配置
-cat > /etc/ssh/sshd_config <<EOF
-Include /etc/ssh/sshd_config.d/*.conf
-
-Port 2222
-PermitRootLogin yes
-ChallengeResponseAuthentication no
-UsePAM yes
-X11Forwarding yes
-PrintMotd no
-AcceptEnv LANG LC_*
-Subsystem	sftp	/usr/lib/openssh/sftp-server
-# custom
-PubkeyAuthentication yes    # 启用公告密钥配对认证方式 
-PasswordAuthentication no   # 禁止密码验证登录,如果启用的话,RSA认证登录就没有意义了
-PermitRootLogin yes
-EOF
-service ssh restart || echo failed to restart ssh service

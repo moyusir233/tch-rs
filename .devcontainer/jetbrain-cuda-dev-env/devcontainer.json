@@ -10,7 +10,6 @@
 	],
 	"appPort": "2222:2222",
 	"features": {
-		"ghcr.io/devcontainers/features/sshd:1": {},
 		"./init-my-dev-env": {}
 	},
 	"hostRequirements": {

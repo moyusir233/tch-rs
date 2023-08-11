@@ -1,6 +1,24 @@
 {
     "cmake.sourceDirectory": "${workspaceFolder}/torch-sys/libtch",
     "cmake.buildDirectory": "${workspaceFolder}/torch-sys/libtch/cmake-build-debug",
+    "cmake.configureOnEdit": false,
+    "cmake.configureOnOpen": false,
+    "cmake.configureOnStart": false,
+    // 可以通过clangd --help-list-hidden查看完整的参数列表
+    "clangd.arguments": [
+        // 启用clang-tidy
+        "--clang-tidy",
+        // compile_commands.json所在的目录,cmake时会生成到cmake的build dir中
+        "--compile-commands-dir=torch-sys/libtch/cmake-build-debug",
+        // 默认格式化的风格
+        "--fallback-style=LLVM",
+        // 允许补充当前编写的头文件
+        "--header-insertion=iwyu",
+        // pch优化的位置
+        "--pch-storage=memory",
+        "--ranking-model=heuristics",
+        "-j=12",
+    ],
     "rust-analyzer.cargo.extraEnv": {
         // 使用python版本编译好的libtorch
         "LIBTORCH_USE_PYTORCH": "1",
@@ -9,5 +27,4 @@
         // 以动态链接的方式链接libtorch库,静态链接还有些问题
         "LIBTORCH_STATIC": "0"
     },
-    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
 }
