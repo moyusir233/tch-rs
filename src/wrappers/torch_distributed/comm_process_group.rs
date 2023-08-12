@@ -42,13 +42,16 @@ impl IntoFuture for CppArc<ArcWork> {
                 })
             })
             .await
-            .expect("failed to join blocking thread handler when wait work")
+            .expect("Failed to join blocking thread handler when wait work")
         }
     }
 }
 
 pub type ProcessGroupNCCL = CppArc<ArcProcessGroupNCCL>;
-
+// TODO 现已知ncclComms只有当参与集合通信的输入张量的设备不同时才会进行创建,
+// 因此可以设置为一个ProcessGroupNCCL仅关联单个设备，并在创建时触发单个设备上的ncclComms初始化即可,
+// 这样后续的集合通信操作就不会被阻塞.现在就考虑在rust一侧增加设备字段还是c++一侧,
+// 也许在c++一侧增加比较好，可以重用一些已有的字段
 impl ProcessGroupNCCL {
     async fn store_based_barrier(
         store: &mut UniquePtr<ArcPrefixStore>,
@@ -77,7 +80,7 @@ impl ProcessGroupNCCL {
         }
     }
 
-    /// 进行进程组的同步,也进行底层nccl comm的创建
+    /// 进行进程组的同步,也触发底层ncclComms的创建
     async fn sync_process_group(
         &mut self,
         store: &mut UniquePtr<ArcPrefixStore>,
@@ -117,12 +120,13 @@ impl ProcessGroupNCCL {
             }
         })
         .await
-        .expect("failed to join the blocking thread handler when sync process group")
+        .expect("Failed to join the blocking thread handler when sync process group")
         .unwrap();
     }
 }
 
 impl ProcessGroupNCCL {
+    /// 基于TCPStore来创建nccl通信进程组，group_name需保证唯一
     pub async fn new(
         group_name: &str,
         address: std::net::SocketAddr,
@@ -182,16 +186,33 @@ impl ProcessGroupNCCL {
         process_group
     }
 
-    #[allow(clippy::needless_pass_by_ref_mut)]
-    pub async fn broadcast(&mut self, tensor: &mut Tensor, src_rank: usize) -> TchResult<()> {
+    /// 使用包装的ArcProcessGroupNCCL进行广播通信
+    async fn _broadcast(
+        &mut self,
+        tensor: *mut torch_sys::C_tensor,
+        src_rank: usize,
+    ) -> TchResult<()> {
         let work: CppArc<_> = unsafe {
-            self.0
-                .pin_mut()
-                .ArcProcessGroupNCCL_broadcast_(tensor.c_tensor, (src_rank as i32).into())
+            self.0.pin_mut().ArcProcessGroupNCCL_broadcast_(tensor, (src_rank as i32).into())
         }
         .within_unique_ptr()
         .into();
         work.await
+    }
+
+    /// 广播发送操作，将张量发送到进程组中的其他所有rank中
+    pub async fn broadcast_send(&mut self, tensor: &Tensor, src_rank: usize) -> TchResult<()> {
+        self._broadcast(tensor.c_tensor, src_rank).await
+    }
+
+    /// 广播接收操作，从src_rank接收张量，并写入到传入的张量当中
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn broadcast_receive(
+        &mut self,
+        tensor: &mut Tensor,
+        src_rank: usize,
+    ) -> TchResult<()> {
+        self._broadcast(tensor.c_tensor, src_rank).await
     }
 }
 
@@ -255,18 +276,23 @@ mod nccl_process_group {
                 .collect();
 
         let groups = create_process_group::<WORLD_SIZE>("broadcast_test", "127.0.0.1:8080").await;
-        let mut join_set = tokio::task::JoinSet::new();
+        let local_set = tokio::task::LocalSet::new();
+        let mut handlers = Vec::with_capacity(groups.len());
 
         for (i, mut group) in groups.into_iter().enumerate() {
-            let mut tensor = if i == 0 {
-                src_tensor.shallow_clone()
+            let handler = if i == 0 {
+                let tensor = src_tensor.shallow_clone();
+                local_set.spawn_local(async move { group.broadcast_send(&tensor, 0).await })
             } else {
-                dst_tensors[i - 1].shallow_clone()
+                let mut tensor = dst_tensors[i - 1].shallow_clone();
+                local_set.spawn_local(async move { group.broadcast_receive(&mut tensor, 0).await })
             };
-            join_set.spawn(async move { group.broadcast(&mut tensor, 0).await });
+            handlers.push(handler);
         }
+        local_set.await;
 
-        while let Some(result) = join_set.join_next().await {
+        for handler in handlers {
+            let result = handler.await;
             result.context("failed to join the task")?.context("failed to broadcast")?;
         }
 
