@@ -47,6 +47,7 @@ serde_json = { version = "1.0.96", optional = true }
 memmap2 = { version = "0.6.1", optional = true }
 derive_builder = "0.12.0"
 autocxx = "0.26"
+cstr = "0.2.11"
 
 [dev-dependencies]
 anyhow = "1"

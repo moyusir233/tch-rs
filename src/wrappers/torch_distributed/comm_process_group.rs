@@ -3,17 +3,124 @@ use crate::wrappers::cxx_wrappers_utils::CppArc;
 use crate::{TchError, Tensor};
 use autocxx::WithinUniquePtr;
 use cxx::UniquePtr;
-use std::ffi::CString;
-use std::pin::Pin;
-use std::sync::OnceLock;
+use std::ffi::CStr;
+use std::future::{Future, IntoFuture};
 use std::time::Duration;
 pub use torch_sys::wrappers::torch_distributed::comm_process_group::*;
 use torch_sys::wrappers::torch_distributed::comm_store::{
     MyTCPStoreOptions, NestPrefixStore, Store,
 };
-use torch_sys::C_tensor;
+
+/// 阻塞地等待`Work`完成执行,如果发生了错误,则返回描述错误的字符串
+fn wait_work(work: &mut UniquePtr<ArcWork>) -> Result<(), &str> {
+    const EMPTY_ERR_MSG: &str = "empty error msg";
+
+    if !work.pin_mut().wait() {
+        let err_msg = work.exception();
+        if err_msg.is_null() {
+            Err(EMPTY_ERR_MSG)
+        } else {
+            Err(unsafe { std::str::from_utf8_unchecked(CStr::from_ptr(err_msg).to_bytes()) })
+        }
+    } else {
+        Ok(())
+    }
+}
+
+impl IntoFuture for CppArc<ArcWork> {
+    type Output = TchResult<()>;
+
+    type IntoFuture = impl Future<Output = Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        async move {
+            let mut work = self.0;
+            // 在spawn blocking创建的阻塞线程上阻塞
+            tokio::task::spawn_blocking(move || {
+                wait_work(&mut work).map_err(|err| {
+                    TchError::Communication(format!("Failed communication operation, err: {err}"))
+                })
+            })
+            .await
+            .expect("failed to join blocking thread handler when wait work")
+        }
+    }
+}
 
 pub type ProcessGroupNCCL = CppArc<ArcProcessGroupNCCL>;
+
+impl ProcessGroupNCCL {
+    async fn store_based_barrier(
+        store: &mut UniquePtr<ArcPrefixStore>,
+        world_size: usize,
+        timeout: Duration,
+    ) {
+        const STORE_BARRIER_KEY: &CStr = cstr::cstr!(store_based_barrier_key);
+
+        store.pin_mut().add(STORE_BARRIER_KEY, 1);
+
+        let start = std::time::Instant::now();
+        let check_interval = Duration::from_millis(10);
+        let mut interval = tokio::time::interval(check_interval);
+
+        loop {
+            interval.tick().await;
+            use std::cmp::Ordering;
+            match store.pin_mut().add(STORE_BARRIER_KEY, 0).cmp(&(world_size as i64)) {
+                Ordering::Equal => break,
+                Ordering::Greater => panic!("Sync count greater than the world_size!"),
+                Ordering::Less => (),
+            }
+            if start.elapsed() >= timeout {
+                panic!("store barrier is timeout!");
+            }
+        }
+    }
+
+    /// 进行进程组的同步,也进行底层nccl comm的创建
+    async fn sync_process_group(
+        &mut self,
+        store: &mut UniquePtr<ArcPrefixStore>,
+        world_size: usize,
+        rank: usize,
+        timeout: Duration,
+    ) {
+        // 先利用store进行同步
+        Self::store_based_barrier(store, world_size, timeout).await;
+
+        // 第一次broadcast时会造成阻塞,需要在其他blocking线程上进行
+        tokio::task::spawn_blocking({
+            let process_group = self.clone();
+
+            move || {
+                let mut process_group = process_group.0;
+                let tensor = if rank == 0 {
+                    crate::Tensor::ones([3, 3], (crate::Kind::Int, crate::Device::Cuda(0)))
+                        * (world_size as i64)
+                } else {
+                    crate::Tensor::zeros([3, 3], (crate::Kind::Int, crate::Device::Cuda(0)))
+                };
+
+                // 利用broadcast进行nccl comm的初始化与同步
+                let mut work = unsafe {
+                    process_group
+                        .pin_mut()
+                        .ArcProcessGroupNCCL_broadcast_(tensor.c_tensor, 0.into())
+                        .within_unique_ptr()
+                };
+
+                wait_work(&mut work).map_err(|err| {
+                    TchError::Communication(format!(
+                        "Failed to sync process group by nccl Broadcast communication, err: {err}"
+                    ))
+                })
+            }
+        })
+        .await
+        .expect("failed to join the blocking thread handler when sync process group")
+        .unwrap();
+    }
+}
 
 impl ProcessGroupNCCL {
     pub async fn new(
@@ -24,94 +131,6 @@ impl ProcessGroupNCCL {
         rank: usize,
         opts: Option<ProcessGroupNCCLOptions>,
     ) -> Self {
-        todo!()
-    }
-
-    pub async fn broadcast(&mut self, tensor: &mut Tensor, src_rank: usize){
-        todo!()
-    }
-
-}
-
-pub trait ProcessGroupExt {
-    /// 基于tcp store来初始化nccl通信进程组
-    async fn new_with_tcp_store(
-        group_name: &str,
-        address: std::net::SocketAddr,
-        timeout: Option<Duration>,
-        world_size: usize,
-        rank: usize,
-        opts: Option<ProcessGroupNCCLOptions>,
-    ) -> UniquePtr<ArcProcessGroupNCCL>;
-
-    /// 广播集合通信操作
-    async fn broadcast(self: Pin<&mut Self>, tensor: &mut Tensor, src_rank: usize)
-        -> TchResult<()>;
-}
-
-async fn _store_based_barrier(
-    store: &mut UniquePtr<ArcPrefixStore>,
-    world_size: usize,
-    timeout: Duration,
-) {
-    static STORE_BARRIER_KEY: OnceLock<CString> = OnceLock::new();
-    let store_key =
-        STORE_BARRIER_KEY.get_or_init(|| CString::new("store_based_barrier_key").unwrap()).as_ref();
-
-    store.pin_mut().add(store_key, 1);
-
-    let start = std::time::Instant::now();
-    let check_interval = Duration::from_millis(10);
-    let mut interval = tokio::time::interval(check_interval);
-
-    loop {
-        interval.tick().await;
-        use std::cmp::Ordering;
-        match store.pin_mut().add(store_key, 0).cmp(&(world_size as i64)) {
-            Ordering::Equal => break,
-            Ordering::Greater => panic!("Sync count greater than the world_size!"),
-            Ordering::Less => (),
-        }
-        if start.elapsed() >= timeout {
-            panic!("store barrier is timeout!");
-        }
-    }
-}
-
-/// 进行进程组的同步,也进行底层nccl comm的创建
-async fn sync_process_group(
-    store: &mut UniquePtr<ArcPrefixStore>,
-    process_group: &mut UniquePtr<ArcProcessGroupNCCL>,
-    world_size: usize,
-    rank: usize,
-    timeout: Duration,
-) {
-    // 先利用store进行同步
-    _store_based_barrier(store, world_size, timeout).await;
-
-    // TODO 利用一次伪的broadcast操作触发底层nccl comm的创建以及其他阻塞的同步操作
-    let mut tensor = if rank == 0 {
-        crate::Tensor::ones([3, 3], (crate::Kind::Int, crate::Device::Cuda(0))) * world_size
-    } else {
-        crate::Tensor::zeros([3, 3], (crate::Kind::Int, crate::Device::Cuda(0)))
-    };
-    // 第一次broadcast时会造成阻塞,需要在其他blocking线程上进行
-    ProcessGroupExt::broadcast(process_group.pin_mut(), &mut tensor, 0)
-        .await
-        .context("failed to sync by the broadcast")
-        .unwrap();
-}
-
-impl ProcessGroupExt for ArcProcessGroupNCCL {
-    /// 创建复用的tcp store,然后创建process group
-    async fn new_with_tcp_store(
-        group_name: &str,
-        address: std::net::SocketAddr,
-        timeout: Option<Duration>,
-        world_size: usize,
-        rank: usize,
-        opts: Option<ProcessGroupNCCLOptions>,
-    ) -> UniquePtr<ArcProcessGroupNCCL> {
         assert_ne!(world_size, 0, "The world_size of ProcessGroup must greater than zero!");
         assert!(
             rank < world_size,
@@ -157,20 +176,22 @@ impl ProcessGroupExt for ArcProcessGroupNCCL {
         process_group.pin_mut().set_sequence_number_for_group();
 
         // 进行进程组的同步
-        sync_process_group(&mut prefix_store, &mut process_group, world_size, rank, timeout).await;
+        let mut process_group = CppArc::from(process_group);
+        process_group.sync_process_group(&mut prefix_store, world_size, rank, timeout).await;
 
         process_group
     }
 
-    async fn broadcast(
-        self: Pin<&mut Self>,
-        tensor: &mut Tensor,
-        src_rank: usize,
-    ) -> TchResult<()> {
-        let work =
-            unsafe { self.broadcast(tensor.c_tensor as *mut C_tensor, (src_rank as i32).into()) }
-                .within_unique_ptr();
-        CxxIntoFuture::into_future(work).await
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn broadcast(&mut self, tensor: &mut Tensor, src_rank: usize) -> TchResult<()> {
+        let work: CppArc<_> = unsafe {
+            self.0
+                .pin_mut()
+                .ArcProcessGroupNCCL_broadcast_(tensor.c_tensor, (src_rank as i32).into())
+        }
+        .within_unique_ptr()
+        .into();
+        work.await
     }
 }
 
@@ -184,7 +205,7 @@ mod nccl_process_group {
     async fn create_process_group<const WORLD_SIZE: usize>(
         group_name: &'static str,
         address: &str,
-    ) -> [UniquePtr<ArcProcessGroupNCCL>; WORLD_SIZE] {
+    ) -> [ProcessGroupNCCL; WORLD_SIZE] {
         let local_set = tokio::task::LocalSet::new();
         let mut handlers = Vec::with_capacity(WORLD_SIZE);
 
@@ -194,12 +215,9 @@ mod nccl_process_group {
         for i in 0..WORLD_SIZE {
             let handler = local_set.spawn_local({
                 let barrier = barrier.clone();
-                let address = address.clone();
                 async move {
-                    let process_group = ArcProcessGroupNCCL::new_with_tcp_store(
-                        group_name, address, None, WORLD_SIZE, i, None,
-                    )
-                    .await;
+                    let process_group =
+                        ProcessGroupNCCL::new(group_name, address, None, WORLD_SIZE, i, None).await;
                     barrier.wait().await;
                     process_group
                 }
@@ -208,7 +226,8 @@ mod nccl_process_group {
         }
         local_set.await;
 
-        let mut process_groups: [_; WORLD_SIZE] = std::array::from_fn(|_| UniquePtr::null());
+        let mut process_groups: [_; WORLD_SIZE] =
+            std::array::from_fn(|_| CppArc(UniquePtr::null()));
         for (i, handler) in handlers.into_iter().enumerate() {
             process_groups[i] = handler.await.unwrap();
         }
@@ -223,20 +242,19 @@ mod nccl_process_group {
         create_process_group::<5>("init_test", "127.0.0.1:8081").await;
     }
 
-    // FIXME 修复第一次进行集合通信操作时底层进行的额外同步操作而导致阻塞的问题
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     async fn broadcast() -> anyhow::Result<()> {
         let device = crate::Device::Cuda(0);
-        let world_size = 2;
+        const WORLD_SIZE: usize = 2;
 
-        let mut src_tensor = crate::Tensor::rand([5, 5], (crate::Kind::Float, device));
-        let mut dst_tensors: Vec<_> =
+        let src_tensor = crate::Tensor::rand([5, 5], (crate::Kind::Float, device));
+        let dst_tensors: Vec<_> =
             std::iter::repeat_with(|| crate::Tensor::zeros([5, 5], (crate::Kind::Float, device)))
                 .into_iter()
-                .take(world_size - 1)
+                .take(WORLD_SIZE - 1)
                 .collect();
 
-        let mut groups = create_process_group::<2>("broadcast_test", "127.0.0.1:8080").await;
+        let groups = create_process_group::<WORLD_SIZE>("broadcast_test", "127.0.0.1:8080").await;
         let mut join_set = tokio::task::JoinSet::new();
 
         for (i, mut group) in groups.into_iter().enumerate() {
@@ -245,9 +263,7 @@ mod nccl_process_group {
             } else {
                 dst_tensors[i - 1].shallow_clone()
             };
-            join_set.spawn(async move {
-                ProcessGroupExt::broadcast(group.pin_mut(), &mut tensor, 0).await
-            });
+            join_set.spawn(async move { group.broadcast(&mut tensor, 0).await });
         }
 
         while let Some(result) = join_set.join_next().await {

@@ -5,6 +5,7 @@
 #include <c10/util/intrusive_ptr.h>
 #include <memory>
 
+#include <string>
 #include <torch/csrc/distributed/c10d/Backend.hpp>
 #include <torch/csrc/distributed/c10d/PrefixStore.hpp>
 #include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
@@ -39,9 +40,9 @@ public:
   bool is_success() const { return inner->isSuccess(); }
 
   // Returns exception if isSuccess() returned false.
-  std::string exception() const {
+  const char *exception() const {
     auto exception_ptr = inner->exception();
-    std::string err_msg;
+    const char *err_msg = nullptr;
 
     try {
       if (exception_ptr) {
@@ -99,7 +100,15 @@ public:
   //   if (!success) { std::rethrow_exception(exception()); }
   //   return success;
   //
-  bool wait() { return inner->wait(); }
+  bool wait() {
+    try {
+      inner->wait();
+    } catch (const std::exception &e) {
+      return false;
+    }
+
+    return true;
+  }
 
   void abort() { inner->abort(); }
 
