@@ -20,7 +20,7 @@ if (CARGO_LTO)
 endif ()
 
 # 设置c++标准
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 
 # 关闭警告
 add_definitions(-w)
@@ -83,6 +83,7 @@ endif ()
 #   TORCH_LIBRARIES    -- Libraries to link against
 #   TORCH_CXX_FLAGS    -- Additional (required) compiler flags
 find_package(Torch REQUIRED)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 if (USE_CUDA)
     # 导入cuda相关的头文件
