@@ -27,6 +27,24 @@ fn wait_work(work: &mut UniquePtr<ArcWork>) -> Result<(), &str> {
     }
 }
 
+/// 确保每个进程组名与所使用的设备唯一
+fn check_group_name_and_device(group_name: &str, device: crate::Device) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    assert!(device.is_cuda(), "Process group device must be cuda device!");
+
+    let group_key = format!("{}_{}", group_name, device.c_int());
+    static PROCESS_GROUP_TABLE: Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
+    let mut table = PROCESS_GROUP_TABLE.lock().unwrap();
+    if table.is_none() {
+        let _ = table.insert(Default::default());
+    }
+
+    assert!(!table.as_ref().unwrap().contains(&group_key), "Process group has been registry!");
+    table.as_mut().unwrap().insert(group_key);
+}
+
 impl IntoFuture for CppArc<ArcWork> {
     type Output = TchResult<()>;
 
@@ -47,11 +65,22 @@ impl IntoFuture for CppArc<ArcWork> {
     }
 }
 
-pub type ProcessGroupNCCL = CppArc<ArcProcessGroupNCCL>;
-// TODO 现已知ncclComms只有当参与集合通信的输入张量的设备不同时才会进行创建,
-// 因此可以设置为一个ProcessGroupNCCL仅关联单个设备，并在创建时触发单个设备上的ncclComms初始化即可,
-// 这样后续的集合通信操作就不会被阻塞.现在就考虑在rust一侧增加设备字段还是c++一侧,
-// 也许在c++一侧增加比较好，可以重用一些已有的字段
+/// 对[`ArcProcessGroupNCCL`]的进一步封装,
+/// 尽管所包装的`inner`是Send的,但因为torch底层的实现每次都需要
+/// 加锁来查表以复用ncclComms,并且多线程同时进行cuda相关操作似乎会带来
+/// 额外的开销,因此这里利用`PhantomData`来使得`ProcessGroupNCCL`是非Send的,
+/// 且保证`ProcessGroupNCCL`独占单个设备
+#[allow(dead_code)]
+pub struct ProcessGroupNCCL {
+    inner: CppArc<ArcProcessGroupNCCL>,
+    group_name: String,
+    world_size: usize,
+    rank: usize,
+    address: std::net::SocketAddr,
+    device: crate::Device,
+    _unsync_mark: std::marker::PhantomData<*mut ()>,
+}
+
 impl ProcessGroupNCCL {
     async fn store_based_barrier(
         store: &mut UniquePtr<ArcPrefixStore>,
@@ -93,15 +122,15 @@ impl ProcessGroupNCCL {
 
         // 第一次broadcast时会造成阻塞,需要在其他blocking线程上进行
         tokio::task::spawn_blocking({
-            let process_group = self.clone();
+            let process_group = self.inner.clone();
+            let device = self.device;
 
             move || {
                 let mut process_group = process_group.0;
                 let tensor = if rank == 0 {
-                    crate::Tensor::ones([3, 3], (crate::Kind::Int, crate::Device::Cuda(0)))
-                        * (world_size as i64)
+                    crate::Tensor::ones([3, 3], (crate::Kind::Int, device)) * (world_size as i64)
                 } else {
-                    crate::Tensor::zeros([3, 3], (crate::Kind::Int, crate::Device::Cuda(0)))
+                    crate::Tensor::zeros([3, 3], (crate::Kind::Int, device))
                 };
 
                 // 利用broadcast进行nccl comm的初始化与同步
@@ -126,13 +155,14 @@ impl ProcessGroupNCCL {
 }
 
 impl ProcessGroupNCCL {
-    /// 基于TCPStore来创建nccl通信进程组，group_name需保证唯一
+    /// 基于TCPStore来创建独占单个加速器的nccl通信进程组，group_name需保证唯一
     pub async fn new(
         group_name: &str,
         address: std::net::SocketAddr,
         timeout: Option<Duration>,
         world_size: usize,
         rank: usize,
+        device: crate::Device,
         opts: Option<ProcessGroupNCCLOptions>,
     ) -> Self {
         assert_ne!(world_size, 0, "The world_size of ProcessGroup must greater than zero!");
@@ -142,6 +172,7 @@ impl ProcessGroupNCCL {
             rank,
             world_size
         );
+        check_group_name_and_device(group_name, device);
 
         let MyTCPStoreOptions {
             waitWorkers: default_wait_workers, timeout: default_timeout, ..
@@ -179,8 +210,16 @@ impl ProcessGroupNCCL {
         );
         process_group.pin_mut().set_sequence_number_for_group();
 
+        let mut process_group = Self {
+            inner: process_group.into(),
+            group_name: group_name.into(),
+            world_size,
+            rank,
+            address,
+            device,
+            _unsync_mark: std::marker::PhantomData,
+        };
         // 进行进程组的同步
-        let mut process_group = CppArc::from(process_group);
         process_group.sync_process_group(&mut prefix_store, world_size, rank, timeout).await;
 
         process_group
@@ -193,7 +232,7 @@ impl ProcessGroupNCCL {
         src_rank: usize,
     ) -> TchResult<()> {
         let work: CppArc<_> = unsafe {
-            self.0.pin_mut().ArcProcessGroupNCCL_broadcast_(tensor, (src_rank as i32).into())
+            self.inner.0.pin_mut().ArcProcessGroupNCCL_broadcast_(tensor, (src_rank as i32).into())
         }
         .within_unique_ptr()
         .into();
@@ -202,6 +241,12 @@ impl ProcessGroupNCCL {
 
     /// 广播发送操作，将张量发送到进程组中的其他所有rank中
     pub async fn broadcast_send(&mut self, tensor: &Tensor, src_rank: usize) -> TchResult<()> {
+        debug_assert_eq!(
+            tensor.device(),
+            self.device,
+            "Input tensor's device is different with PorcessGroup!"
+        );
+
         self._broadcast(tensor.c_tensor, src_rank).await
     }
 
@@ -226,29 +271,36 @@ mod nccl_process_group {
     async fn create_process_group<const WORLD_SIZE: usize>(
         group_name: &'static str,
         address: &str,
+        devices: [crate::Device; WORLD_SIZE],
     ) -> [ProcessGroupNCCL; WORLD_SIZE] {
         let local_set = tokio::task::LocalSet::new();
-        let mut handlers = Vec::with_capacity(WORLD_SIZE);
-
         let address = std::net::SocketAddr::from_str(address).unwrap();
         let barrier = Arc::new(tokio::sync::Barrier::new(WORLD_SIZE));
 
-        for i in 0..WORLD_SIZE {
-            let handler = local_set.spawn_local({
+        let handlers: [_; WORLD_SIZE] = std::array::from_fn(|i| {
+            local_set.spawn_local({
                 let barrier = barrier.clone();
                 async move {
-                    let process_group =
-                        ProcessGroupNCCL::new(group_name, address, None, WORLD_SIZE, i, None).await;
+                    let process_group = ProcessGroupNCCL::new(
+                        group_name, address, None, WORLD_SIZE, i, devices[i], None,
+                    )
+                    .await;
                     barrier.wait().await;
                     process_group
                 }
-            });
-            handlers.push(handler);
-        }
+            })
+        });
         local_set.await;
 
-        let mut process_groups: [_; WORLD_SIZE] =
-            std::array::from_fn(|_| CppArc(UniquePtr::null()));
+        let mut process_groups: [_; WORLD_SIZE] = std::array::from_fn(|_| ProcessGroupNCCL {
+            inner: CppArc(UniquePtr::null()),
+            group_name: Default::default(),
+            world_size: 0,
+            rank: 0,
+            address: "127.0.0.1:8080".parse().unwrap(),
+            device: crate::Device::Cpu,
+            _unsync_mark: Default::default(),
+        });
         for (i, handler) in handlers.into_iter().enumerate() {
             process_groups[i] = handler.await.unwrap();
         }
@@ -258,24 +310,48 @@ mod nccl_process_group {
 
     #[tokio::test]
     async fn init() {
-        create_process_group::<3>("init_test", "127.0.0.1:8081").await;
-        create_process_group::<4>("init_test", "127.0.0.1:8081").await;
-        create_process_group::<5>("init_test", "127.0.0.1:8081").await;
+        crate::Cuda::device_count();
+        create_process_group::<2>(
+            "init_test",
+            "127.0.0.1:8081",
+            std::array::from_fn(crate::Device::Cuda),
+        )
+        .await;
+    }
+
+    #[should_panic]
+    #[tokio::test]
+    async fn failed_init() {
+        crate::Cuda::device_count();
+        create_process_group::<1>(
+            "init_test",
+            "127.0.0.1:8081",
+            std::array::from_fn(crate::Device::Cuda),
+        )
+        .await;
+        create_process_group::<1>(
+            "init_test",
+            "127.0.0.1:8081",
+            std::array::from_fn(crate::Device::Cuda),
+        )
+        .await;
     }
 
     #[tokio::test]
     async fn broadcast() -> anyhow::Result<()> {
-        let device = crate::Device::Cuda(0);
         const WORLD_SIZE: usize = 2;
+        let devices = std::array::from_fn(crate::Device::Cuda);
 
-        let src_tensor = crate::Tensor::rand([5, 5], (crate::Kind::Float, device));
-        let dst_tensors: Vec<_> =
-            std::iter::repeat_with(|| crate::Tensor::zeros([5, 5], (crate::Kind::Float, device)))
-                .into_iter()
-                .take(WORLD_SIZE - 1)
-                .collect();
+        let src_tensor = crate::Tensor::rand([5, 5], (crate::Kind::Float, devices[0]));
+        let dst_tensors: Vec<_> = devices
+            .iter()
+            .skip(1)
+            .map(|device| crate::Tensor::zeros([5, 5], (crate::Kind::Float, *device)))
+            .collect();
 
-        let groups = create_process_group::<WORLD_SIZE>("broadcast_test", "127.0.0.1:8080").await;
+        let groups =
+            create_process_group::<WORLD_SIZE>("broadcast_test", "127.0.0.1:8080", devices).await;
+
         let local_set = tokio::task::LocalSet::new();
         let mut handlers = Vec::with_capacity(groups.len());
 
