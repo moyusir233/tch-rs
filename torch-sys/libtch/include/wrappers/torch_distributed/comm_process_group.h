@@ -3,6 +3,8 @@
 
 #include <ATen/core/TensorBody.h>
 #include <c10/util/intrusive_ptr.h>
+#include <c10/util/irange.h>
+#include <chrono>
 #include <memory>
 
 #include <string>
@@ -11,6 +13,7 @@
 #include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
 #include <torch/csrc/distributed/c10d/TCPStore.hpp>
 #include <utility>
+#include <vector>
 
 #include "Work.hpp"
 #include "torch_api.h"
@@ -136,6 +139,23 @@ private:
       : _ArcProcessGroupNCCL(
             c10::intrusive_ptr<ProcessGroupNCCL>(process_group)) {}
 
+  // 用于clone Tensor指针
+  std::vector<at::Tensor> clone_tensor_prt(const tensor &tensor) {
+    return {at::Tensor(*tensor)};
+  }
+
+  std::vector<std::vector<at::Tensor>>
+  clone_tensor_prt(const std::vector<tensor> &tensors) {
+    auto tensors_size = tensors.size();
+    vector<vector<at::Tensor>> tensors_vec = {{}};
+    tensors_vec[0].reserve(tensors_size);
+    for (const auto i : c10::irange(tensors_size)) {
+      tensors_vec[0][i] = at::Tensor(*tensors[i]);
+    }
+
+    return std::move(tensors_vec);
+  }
+
 public:
   explicit ArcProcessGroupNCCL(const ArcPrefixStore &store, std::int32_t rank,
                                std::int32_t size,
@@ -155,13 +175,125 @@ public:
 
   void set_sequence_number_for_group() { inner->setSequenceNumberForGroup(); }
 
-  ArcWork broadcast_(tensor tensor, std::int32_t src) {
-    BroadcastOptions opts = {.rootRank = src, .rootTensor = 0};
-    // 因为rust侧的broadcast是通过传入张量引用,进行就地操作的语义,因此这里不能移动,
-    // 而是显式地创建拷贝
-    vector<at::Tensor> tensors = {at::Tensor(*tensor)};
+  ArcWork broadcast_(tensor tensor, std::int32_t src_rank) {
+    BroadcastOptions opts = {
+        .rootRank = src_rank,
+        .rootTensor = 0,
+    };
+    auto tensors = clone_tensor_prt(tensor);
 
     return ArcWork(inner->broadcast(tensors, opts));
+  }
+
+  ArcWork all_reduce_(tensor tensor, ReduceOp::RedOpType reduce_op) {
+    auto all_reduce_opts = AllreduceOptions{
+        .reduceOp = reduce_op,
+    };
+    auto tensors = clone_tensor_prt(tensor);
+
+    return ArcWork(inner->allreduce(tensors, all_reduce_opts));
+  }
+
+  ArcWork reduce_(tensor tensor, std::int32_t dst_rank,
+                  ReduceOp::RedOpType reduce_op) {
+    auto reduce_opts = ReduceOptions{
+        .rootRank = dst_rank,
+        .reduceOp = reduce_op,
+    };
+
+    auto tensors = clone_tensor_prt(tensor);
+
+    return ArcWork(inner->reduce(tensors, reduce_opts));
+  }
+
+  ArcWork all_gather_(tensor input_tensor,
+                      std::vector<tensor> &output_tensors) {
+    auto input_tensors = clone_tensor_prt(input_tensor);
+
+    auto output_tensors_vec = clone_tensor_prt(output_tensors);
+
+    return ArcWork(inner->allgather(output_tensors_vec, input_tensors));
+    ;
+  }
+
+  ArcWork all_gather_into_tensor_(tensor input_tensor, tensor output_tensor) {
+    auto input_tensor_clone = at::Tensor(*input_tensor);
+
+    auto output_tensor_clone = at::Tensor(*output_tensor);
+
+    return ArcWork(
+        inner->_allgather_base(output_tensor_clone, input_tensor_clone));
+  }
+
+  ArcWork gather_(tensor input_tensor, std::vector<tensor> &output_tensors,
+                  std::int32_t dst_rank) {
+    auto input_tensors = clone_tensor_prt(input_tensor);
+
+    auto output_tensors_vec = clone_tensor_prt(output_tensors);
+
+    GatherOptions opts = {.rootRank = dst_rank};
+
+    return ArcWork(inner->gather(output_tensors_vec, input_tensors, opts));
+  }
+
+  ArcWork scatter_(std::vector<tensor> &input_tensors, tensor output_tensor,
+                   std::int32_t src_rank) {
+    auto input_tensors_vec = clone_tensor_prt(input_tensors);
+
+    auto output_tensors = clone_tensor_prt(output_tensor);
+
+    ScatterOptions opts = {.rootRank = src_rank};
+
+    return ArcWork(inner->scatter(output_tensors, input_tensors_vec, opts));
+  }
+
+  ArcWork reduce_scatter_(std::vector<tensor> &input_tensors,
+                          tensor output_tensor, ReduceOp::RedOpType reduce_op) {
+    auto input_tensors_vec = clone_tensor_prt(input_tensors);
+
+    auto output_tensors = clone_tensor_prt(output_tensor);
+
+    ReduceScatterOptions opts = {.reduceOp = reduce_op};
+
+    return ArcWork(
+        inner->reduce_scatter(output_tensors, input_tensors_vec, opts));
+  }
+
+  ArcWork reduce_scatter_tensor_(tensor input_tensor, tensor output_tensor,
+                                 ReduceOp::RedOpType reduce_op) {
+    auto input_tensor_clone = at::Tensor(*input_tensor);
+
+    auto output_tensor_clone = at::Tensor(*output_tensor);
+
+    ReduceScatterOptions opts = {.reduceOp = reduce_op};
+
+    return ArcWork(inner->_reduce_scatter_base(output_tensor_clone,
+                                               input_tensor_clone, opts));
+  }
+
+  ArcWork all_to_all_single_(tensor input_tensor, tensor output_tensor,
+                             std::vector<int64_t> &output_split_sizes,
+                             std::vector<int64_t> &input_split_sizes) {
+
+    auto input_tensor_clone = at::Tensor(*input_tensor);
+
+    auto output_tensor_clone = at::Tensor(*output_tensor);
+
+    return ArcWork(inner->alltoall_base(output_tensor_clone, input_tensor_clone,
+                                        output_split_sizes, input_split_sizes));
+  }
+
+  ArcWork alltoall_(tensor input_tensor, tensor output_tensor) {
+    auto input_tensors = clone_tensor_prt(input_tensor);
+
+    auto output_tensors = clone_tensor_prt(output_tensor);
+
+    return ArcWork(inner->alltoall(output_tensors, input_tensors));
+  }
+
+  ArcWork barrier_(std::vector<int64_t> &device_ids) {
+    BarrierOptions opts = {.device_ids = device_ids};
+    return ArcWork(inner->barrier(opts));
   }
 };
 
