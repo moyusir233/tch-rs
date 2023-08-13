@@ -3,6 +3,7 @@ use crate::wrappers::cxx_wrappers_utils::CppArc;
 use crate::{TchError, Tensor};
 use autocxx::WithinUniquePtr;
 use cxx::UniquePtr;
+use smallvec::SmallVec;
 use std::ffi::CStr;
 use std::future::{Future, IntoFuture};
 use std::time::Duration;
@@ -10,6 +11,8 @@ pub use torch_sys::wrappers::torch_distributed::comm_process_group::*;
 use torch_sys::wrappers::torch_distributed::comm_store::{
     MyTCPStoreOptions, NestPrefixStore, Store,
 };
+
+pub type ReduceOp = ReduceOp_RedOpType;
 
 /// 阻塞地等待`Work`完成执行,如果发生了错误,则返回描述错误的字符串
 fn wait_work(work: &mut UniquePtr<ArcWork>) -> Result<(), &str> {
@@ -45,6 +48,16 @@ fn check_group_name_and_device(group_name: &str, device: crate::Device) {
     table.as_mut().unwrap().insert(group_key);
 }
 
+/// 由集合通信操作所需操作的最大张量数量来决定,通常是单机8卡,
+/// 一次集合通信操作涉及到最多8个张量
+const MAX_SMALL_VEC_SIZE: u8 = 8;
+#[inline]
+fn to_small_vec(
+    tensors: &[Tensor],
+) -> SmallVec<[*mut torch_sys::C_tensor; MAX_SMALL_VEC_SIZE as usize]> {
+    tensors.iter().map(|tensor| tensor.c_tensor).collect()
+}
+
 impl IntoFuture for CppArc<ArcWork> {
     type Output = TchResult<()>;
 
@@ -73,11 +86,11 @@ impl IntoFuture for CppArc<ArcWork> {
 #[allow(dead_code)]
 pub struct ProcessGroupNCCL {
     inner: CppArc<ArcProcessGroupNCCL>,
-    group_name: String,
-    world_size: usize,
-    rank: usize,
-    address: std::net::SocketAddr,
-    device: crate::Device,
+    pub group_name: String,
+    pub world_size: usize,
+    pub rank: usize,
+    pub address: std::net::SocketAddr,
+    pub device: crate::Device,
     _unsync_mark: std::marker::PhantomData<*mut ()>,
 }
 
@@ -114,7 +127,6 @@ impl ProcessGroupNCCL {
         &mut self,
         store: &mut UniquePtr<ArcPrefixStore>,
         world_size: usize,
-        rank: usize,
         timeout: Duration,
     ) {
         // 先利用store进行同步
@@ -128,7 +140,12 @@ impl ProcessGroupNCCL {
             move || {
                 let mut process_group = process_group.0;
 
-                let mut work =  process_group.pin_mut().ArcProcessGroupNCCL_barrier_();
+                let mut work = process_group
+                    .pin_mut()
+                    .ArcProcessGroupNCCL_barrier_(DeviceIDs::from(
+                        [device.c_int() as i64].as_slice(),
+                    ))
+                    .within_unique_ptr();
                 wait_work(&mut work).map_err(|err| {
                     TchError::Communication(format!(
                         "Failed to sync process group by nccl Broadcast communication, err: {err}"
@@ -140,6 +157,37 @@ impl ProcessGroupNCCL {
         .expect("Failed to join the blocking thread handler when sync process group")
         .unwrap();
     }
+}
+
+macro_rules! check_tensor_device {
+    ($tensor:ident,$target_device:expr) => {
+        debug_assert_eq!(
+            $tensor.device(),
+            $target_device,
+            "Input tensor's device is different with PorcessGroup!"
+        );
+    };
+}
+
+macro_rules! batch_check_tensor_device {
+    ($tensors:ident,$target_device:expr) => {
+        #[cfg(debug_assertions)]
+        {
+            for tensor in $tensors.iter() {
+                debug_assert_eq!(
+                    tensor.device(),
+                    $target_device,
+                    "Input tensor's device is different with PorcessGroup!"
+                );
+            }
+        }
+    };
+}
+
+macro_rules! generate_and_await_work {
+    ($work_generate_exp:expr) => {
+        CppArc::from(unsafe { $work_generate_exp.within_unique_ptr() }).await
+    };
 }
 
 impl ProcessGroupNCCL {
@@ -208,7 +256,7 @@ impl ProcessGroupNCCL {
             _unsync_mark: std::marker::PhantomData,
         };
         // 进行进程组的同步
-        process_group.sync_process_group(&mut prefix_store, world_size, rank, timeout).await;
+        process_group.sync_process_group(&mut prefix_store, world_size, timeout).await;
 
         process_group
     }
@@ -219,23 +267,17 @@ impl ProcessGroupNCCL {
         tensor: *mut torch_sys::C_tensor,
         src_rank: usize,
     ) -> TchResult<()> {
-        let work: CppArc<_> = unsafe {
-            self.inner.0.pin_mut().ArcProcessGroupNCCL_broadcast_(tensor, (src_rank as i32).into())
-        }
-        .within_unique_ptr()
-        .into();
-        work.await
+        generate_and_await_work!(self
+            .inner
+            .pin_mut()
+            .ArcProcessGroupNCCL_broadcast_(tensor, (src_rank as i32).into()))
     }
 
     /// 广播发送操作，将张量发送到进程组中的其他所有rank中
-    pub async fn broadcast_send(&mut self, tensor: &Tensor, src_rank: usize) -> TchResult<()> {
-        debug_assert_eq!(
-            tensor.device(),
-            self.device,
-            "Input tensor's device is different with PorcessGroup!"
-        );
+    pub async fn broadcast_send(&mut self, tensor: &Tensor) -> TchResult<()> {
+        check_tensor_device!(tensor, self.device);
 
-        self._broadcast(tensor.c_tensor, src_rank).await
+        self._broadcast(tensor.c_tensor, self.rank).await
     }
 
     /// 广播接收操作，从src_rank接收张量，并写入到传入的张量当中
@@ -245,8 +287,120 @@ impl ProcessGroupNCCL {
         tensor: &mut Tensor,
         src_rank: usize,
     ) -> TchResult<()> {
+        check_tensor_device!(tensor, self.device);
+
         self._broadcast(tensor.c_tensor, src_rank).await
     }
+
+    /// allreduce操作
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn all_reduce(&mut self, tensor: &mut Tensor, reduce_op: ReduceOp) -> TchResult<()> {
+        check_tensor_device!(tensor, self.device);
+
+        generate_and_await_work!(self
+            .inner
+            .pin_mut()
+            .ArcProcessGroupNCCL_all_reduce_(tensor.c_tensor, reduce_op))
+    }
+
+    async fn _reduce(
+        &mut self,
+        tensor: *mut torch_sys::C_tensor,
+        dst_rank: usize,
+        reduce_op: ReduceOp,
+    ) -> TchResult<()> {
+        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_reduce_(
+            tensor,
+            (dst_rank as i32).into(),
+            reduce_op
+        ))
+    }
+
+    /// reduce的发送操作,发送的张量将最终归约到`dst_rank`
+    pub async fn reduce_send(
+        &mut self,
+        tensor: &Tensor,
+        dst_rank: usize,
+        reduce_op: ReduceOp,
+    ) -> TchResult<()> {
+        check_tensor_device!(tensor, self.device);
+
+        self._reduce(tensor.c_tensor, dst_rank, reduce_op).await
+    }
+
+    /// reduce的接收操作,从其他rank处接收与规约张量
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn reduce_receive(
+        &mut self,
+        tensor: &mut Tensor,
+        reduce_op: ReduceOp,
+    ) -> TchResult<()> {
+        check_tensor_device!(tensor, self.device);
+
+        self._reduce(tensor.c_tensor, self.rank, reduce_op).await
+    }
+
+    pub async fn all_gather(
+        &mut self,
+        input_tensor: &Tensor,
+        output_tensors: impl AsRef<[Tensor]>,
+    ) -> TchResult<()> {
+        check_tensor_device!(input_tensor, self.device);
+
+        let output_tensors = output_tensors.as_ref();
+        batch_check_tensor_device!(output_tensors, self.device);
+
+        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_all_gather_(
+            input_tensor.c_tensor,
+            to_small_vec(output_tensors).as_slice().into(),
+        ))
+    }
+
+    pub async fn all_gather_into_tensor(
+        &mut self,
+        input_tensor: &Tensor,
+        output_tensor: &mut Tensor,
+    ) -> TchResult<()> {
+        check_tensor_device!(input_tensor, self.device);
+        check_tensor_device!(output_tensor, self.device);
+
+        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_all_gather_into_tensor_(
+            input_tensor.c_tensor,
+            output_tensor.c_tensor,
+        ))
+    }
+
+    async fn _gather(
+        &mut self,
+        input_tensor: *mut torch_sys::C_tensor,
+        output_tensors: Tensors,
+        dst_rank: usize,
+    ) -> TchResult<()> {
+        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_gather_(
+            input_tensor,
+            output_tensors,
+            (dst_rank as i32).into()
+        ))
+    }
+
+    pub async fn gather_send(&mut self, input_tensor: &Tensor, dst_rank: usize) -> TchResult<()> {
+        self._gather(input_tensor.c_tensor, [].as_slice().into(), dst_rank).await
+    }
+
+    pub async fn gather_receive(
+        &mut self,
+        input_tensor: &Tensor,
+        mut output_tensors: impl AsMut<[Tensor]>,
+    ) -> TchResult<()> {
+        self._gather(
+            input_tensor.c_tensor,
+            to_small_vec(output_tensors.as_mut()).as_slice().into(),
+            self.rank,
+        )
+        .await
+    }
+
+
 }
 
 #[cfg(test)]
@@ -346,7 +500,7 @@ mod nccl_process_group {
         for (i, mut group) in groups.into_iter().enumerate() {
             let handler = if i == 0 {
                 let tensor = src_tensor.shallow_clone();
-                local_set.spawn_local(async move { group.broadcast_send(&tensor, 0).await })
+                local_set.spawn_local(async move { group.broadcast_send(&tensor).await })
             } else {
                 let mut tensor = dst_tensors[i - 1].shallow_clone();
                 local_set.spawn_local(async move { group.broadcast_receive(&mut tensor, 0).await })

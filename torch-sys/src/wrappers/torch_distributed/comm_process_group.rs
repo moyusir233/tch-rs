@@ -73,6 +73,27 @@ impl CppArcClone for ArcWork {
     }
 }
 
+macro_rules! impl_from_slice_to_ptr_array {
+    ($ptr_ty:ty,$impl_target_ty:ty) => {
+        impl From<&[$ptr_ty]> for $impl_target_ty {
+            fn from(value: &[$ptr_ty]) -> Self {
+                if value.is_empty() {
+                    return Self { ptr: std::ptr::null_mut(), size: 0 };
+                }
+                Self { ptr: value.as_ptr() as *mut $ptr_ty, size: value.len() as u64 }
+            }
+        }
+    };
+}
+
+impl_from_slice_to_ptr_array! {
+    i64,DeviceIDs
+}
+
+impl_from_slice_to_ptr_array! {
+    *mut crate::C_tensor,Tensors
+}
+
 #[cfg(test)]
 mod nccl_process_group {
     use super::*;
