@@ -33,7 +33,7 @@ pub mod torch_distributed {
             safety!(unsafe_ffi)
             generate_pod!("c10d::ProcessGroupNCCLOptions")
             generate_pod!("c10d::Tensors")
-            generate_pod!("c10d::DeviceIDs")
+            generate_pod!("c10d::I64List")
             extern_cpp_opaque_type!("at::Tensor",crate::C_tensor)
             extern_cpp_opaque_type!("c10d::ArcTCPStore",crate::wrappers::autocxx_wrappers::torch_distributed::comm_store::ArcTCPStore)
             extern_cpp_opaque_type!("c10d::ArcPrefixStore",crate::wrappers::autocxx_wrappers::torch_distributed::comm_store::ArcPrefixStore)

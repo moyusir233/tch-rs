@@ -53,6 +53,8 @@ smallvec = "1.11.0"
 [dev-dependencies]
 anyhow = "1"
 criterion = "0.5.1"
+futures-lite = "1.13.0"
+konst = "0.3.6"
 
 [workspace]
 members = [

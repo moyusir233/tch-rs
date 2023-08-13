@@ -87,7 +87,7 @@ macro_rules! impl_from_slice_to_ptr_array {
 }
 
 impl_from_slice_to_ptr_array! {
-    i64,DeviceIDs
+    i64,I64List
 }
 
 impl_from_slice_to_ptr_array! {

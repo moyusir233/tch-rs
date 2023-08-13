@@ -133,7 +133,7 @@ struct ProcessGroupNCCLOptions {
 CREATE_CONTAINER_CLASS(_ArcProcessGroupNCCL, ProcessGroupNCCL)
 
 CREATE_PTR_ARRAY(Tensors, tensor)
-CREATE_PTR_ARRAY(DeviceIDs, std::int64_t)
+CREATE_PTR_ARRAY(I64List, std::int64_t)
 
 class ArcProcessGroupNCCL : public _ArcProcessGroupNCCL {
 private:
@@ -268,26 +268,30 @@ public:
   }
 
   ArcWork all_to_all_single_(tensor input_tensor, tensor output_tensor,
-                             std::vector<int64_t> &output_split_sizes,
-                             std::vector<int64_t> &input_split_sizes) {
+                             I64List output_split_sizes,
+                             I64List input_split_sizes) {
+    auto input_split_vec = std::vector<std::int64_t>(
+        input_split_sizes.ptr, input_split_sizes.ptr + input_split_sizes.size);
+
+    auto output_split_vec = std::vector<std::int64_t>(
+        output_split_sizes.ptr,
+        output_split_sizes.ptr + output_split_sizes.size);
+
     return ArcWork(inner->alltoall_base(*output_tensor, *input_tensor,
-                                        output_split_sizes, input_split_sizes));
+                                        output_split_vec, input_split_vec));
   }
 
-  ArcWork alltoall_(tensor input_tensor, tensor output_tensor) {
-    auto input_tensors = clone_tensor_prt(input_tensor);
+  ArcWork alltoall_(Tensors input_tensors, Tensors output_tensors) {
+    auto input_tensors_vec = clone_tensor_prt(input_tensors)[0];
 
-    auto output_tensors = clone_tensor_prt(output_tensor);
+    auto output_tensors_vec = clone_tensor_prt(output_tensors)[0];
 
-    return ArcWork(inner->alltoall(output_tensors, input_tensors));
+    return ArcWork(inner->alltoall(output_tensors_vec, input_tensors_vec));
   }
 
-  ArcWork barrier_(const DeviceIDs device_ids) {
-    std::vector<std::int64_t> vec;
-    vec.reserve(device_ids.size);
-    for (const auto i : c10::irange(device_ids.size)) {
-      vec[i] = device_ids.ptr[i];
-    }
+  ArcWork barrier_(const I64List device_ids) {
+    std::vector<std::int64_t> vec(device_ids.ptr,
+                                  device_ids.ptr + device_ids.size);
 
     BarrierOptions opts = {.device_ids = vec};
     return ArcWork(inner->barrier(opts));

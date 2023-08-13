@@ -401,9 +401,9 @@ impl TchCmakeBuilder {
         // 设置表示是rust侧发起的编译的flag
         cmake_config.define("CARGO_BUILD", "ON");
         // 表示进行测试
-        if cfg!(test) {
-            cmake_config.define("CARGO_TEST", "ON");
-        }
+        // if cfg!(test) {
+        //     cmake_config.define("CARGO_TEST", "ON");
+        // }
         // 表示进行链接时优化lto
         #[cfg(feature = "lto")]
         {

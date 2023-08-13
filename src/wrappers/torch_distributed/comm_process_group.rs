@@ -142,9 +142,7 @@ impl ProcessGroupNCCL {
 
                 let mut work = process_group
                     .pin_mut()
-                    .ArcProcessGroupNCCL_barrier_(DeviceIDs::from(
-                        [device.c_int() as i64].as_slice(),
-                    ))
+                    .ArcProcessGroupNCCL_barrier_([device.c_int() as i64].as_slice().into())
                     .within_unique_ptr();
                 wait_work(&mut work).map_err(|err| {
                     TchError::Communication(format!(
@@ -186,7 +184,7 @@ macro_rules! batch_check_tensor_device {
 
 macro_rules! generate_and_await_work {
     ($work_generate_exp:expr) => {
-        CppArc::from(unsafe { $work_generate_exp.within_unique_ptr() }).await
+        CppArc::from($work_generate_exp.within_unique_ptr()).await
     };
 }
 
@@ -267,10 +265,9 @@ impl ProcessGroupNCCL {
         tensor: *mut torch_sys::C_tensor,
         src_rank: usize,
     ) -> TchResult<()> {
-        generate_and_await_work!(self
-            .inner
-            .pin_mut()
-            .ArcProcessGroupNCCL_broadcast_(tensor, (src_rank as i32).into()))
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_broadcast_(tensor, (src_rank as i32).into())
+        })
     }
 
     /// 广播发送操作，将张量发送到进程组中的其他所有rank中
@@ -297,10 +294,9 @@ impl ProcessGroupNCCL {
     pub async fn all_reduce(&mut self, tensor: &mut Tensor, reduce_op: ReduceOp) -> TchResult<()> {
         check_tensor_device!(tensor, self.device);
 
-        generate_and_await_work!(self
-            .inner
-            .pin_mut()
-            .ArcProcessGroupNCCL_all_reduce_(tensor.c_tensor, reduce_op))
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_all_reduce_(tensor.c_tensor, reduce_op)
+        })
     }
 
     async fn _reduce(
@@ -309,11 +305,13 @@ impl ProcessGroupNCCL {
         dst_rank: usize,
         reduce_op: ReduceOp,
     ) -> TchResult<()> {
-        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_reduce_(
-            tensor,
-            (dst_rank as i32).into(),
-            reduce_op
-        ))
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_reduce_(
+                tensor,
+                (dst_rank as i32).into(),
+                reduce_op,
+            )
+        })
     }
 
     /// reduce的发送操作,发送的张量将最终归约到`dst_rank`
@@ -350,12 +348,15 @@ impl ProcessGroupNCCL {
         let output_tensors = output_tensors.as_ref();
         batch_check_tensor_device!(output_tensors, self.device);
 
-        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_all_gather_(
-            input_tensor.c_tensor,
-            to_small_vec(output_tensors).as_slice().into(),
-        ))
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_all_gather_(
+                input_tensor.c_tensor,
+                to_small_vec(output_tensors).as_slice().into(),
+            )
+        })
     }
 
+    #[allow(clippy::needless_pass_by_ref_mut)]
     pub async fn all_gather_into_tensor(
         &mut self,
         input_tensor: &Tensor,
@@ -364,10 +365,12 @@ impl ProcessGroupNCCL {
         check_tensor_device!(input_tensor, self.device);
         check_tensor_device!(output_tensor, self.device);
 
-        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_all_gather_into_tensor_(
-            input_tensor.c_tensor,
-            output_tensor.c_tensor,
-        ))
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_all_gather_into_tensor_(
+                input_tensor.c_tensor,
+                output_tensor.c_tensor,
+            )
+        })
     }
 
     async fn _gather(
@@ -376,11 +379,13 @@ impl ProcessGroupNCCL {
         output_tensors: Tensors,
         dst_rank: usize,
     ) -> TchResult<()> {
-        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_gather_(
-            input_tensor,
-            output_tensors,
-            (dst_rank as i32).into()
-        ))
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_gather_(
+                input_tensor,
+                output_tensors,
+                (dst_rank as i32).into(),
+            )
+        })
     }
 
     pub async fn gather_send(&mut self, input_tensor: &Tensor, dst_rank: usize) -> TchResult<()> {
@@ -400,18 +405,155 @@ impl ProcessGroupNCCL {
         .await
     }
 
+    async fn _scatter(
+        &mut self,
+        input_tensors: Tensors,
+        output_tensor: *mut torch_sys::C_tensor,
+        src_rank: usize,
+    ) -> TchResult<()> {
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_scatter_(
+                input_tensors,
+                output_tensor,
+                (src_rank as i32).into(),
+            )
+        })
+    }
 
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn scatter_send(
+        &mut self,
+        input_tensors: impl AsRef<[Tensor]>,
+        output_tensor: &mut Tensor,
+    ) -> TchResult<()> {
+        let input_tensors = input_tensors.as_ref();
+        batch_check_tensor_device!(input_tensors, self.device);
+
+        check_tensor_device!(output_tensor, self.device);
+
+        self._scatter(
+            to_small_vec(input_tensors).as_slice().into(),
+            output_tensor.c_tensor,
+            self.rank,
+        )
+        .await
+    }
+
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn scatter_receive(&mut self, output_tensor: &mut Tensor) -> TchResult<()> {
+        check_tensor_device!(output_tensor, self.device);
+
+        self._scatter([].as_slice().into(), output_tensor.c_tensor, self.rank).await
+    }
+
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn reduce_scatter(
+        &mut self,
+        input_tensors: impl AsRef<[Tensor]>,
+        output_tensor: &mut Tensor,
+        reduce_op: ReduceOp,
+    ) -> TchResult<()> {
+        let input_tensors = input_tensors.as_ref();
+        batch_check_tensor_device!(input_tensors, self.device);
+
+        check_tensor_device!(output_tensor, self.device);
+
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_reduce_scatter_(
+                to_small_vec(input_tensors).as_slice().into(),
+                output_tensor.c_tensor,
+                reduce_op,
+            )
+        })
+    }
+
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn reduce_scatter_into_tensor(
+        &mut self,
+        input_tensor: &Tensor,
+        output_tensor: &mut Tensor,
+        reduce_op: ReduceOp,
+    ) -> TchResult<()> {
+        check_tensor_device!(input_tensor, self.device);
+
+        check_tensor_device!(output_tensor, self.device);
+
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_reduce_scatter_tensor_(
+                input_tensor.c_tensor,
+                output_tensor.c_tensor,
+                reduce_op,
+            )
+        })
+    }
+
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub async fn all_to_all_single(
+        &mut self,
+        input_tensor: &Tensor,
+        output_tensor: &mut Tensor,
+        input_split_sizes: impl AsRef<[i64]>,
+        output_split_sizes: impl AsRef<[i64]>,
+    ) -> TchResult<()> {
+        check_tensor_device!(input_tensor, self.device);
+
+        check_tensor_device!(output_tensor, self.device);
+
+        generate_and_await_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_all_to_all_single_(
+                input_tensor.c_tensor,
+                output_tensor.c_tensor,
+                input_split_sizes.as_ref().into(),
+                output_split_sizes.as_ref().into(),
+            )
+        })
+    }
+
+    pub async fn all_to_all(
+        &mut self,
+        input_tensors: impl AsRef<[Tensor]>,
+        mut output_tensors: impl AsMut<[Tensor]>,
+    ) -> TchResult<()> {
+        let input_tensors = input_tensors.as_ref();
+        batch_check_tensor_device!(input_tensors, self.device);
+
+        let output_tensors = output_tensors.as_mut();
+        batch_check_tensor_device!(output_tensors, self.device);
+
+        generate_and_await_work!(self.inner.pin_mut().ArcProcessGroupNCCL_alltoall_(
+            to_small_vec(input_tensors).as_slice().into(),
+            to_small_vec(output_tensors).as_slice().into(),
+        ))
+    }
+
+    pub async fn barrier(&mut self) -> TchResult<()> {
+        generate_and_await_work!(self
+            .inner
+            .pin_mut()
+            .ArcProcessGroupNCCL_barrier_([self.device.c_int().into()].as_slice().into()))
+    }
 }
 
 #[cfg(test)]
 mod nccl_process_group {
+    use crate::{Device, Kind};
+
     use super::*;
     use anyhow::Context;
+    use futures_lite::FutureExt;
+    use std::pin::Pin;
     use std::str::FromStr;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
 
+    const CUDA_DEVICE_COUNT_STR: &str =
+        konst::option::unwrap_or!(option_env!("CARGO_TEST_CUDA_DEVICE_COUNT"), "2");
+
+    const CUDA_DEVICE_COUNT: usize =
+        konst::unwrap_ctx!(konst::primitive::parse_usize(CUDA_DEVICE_COUNT_STR));
+
     async fn create_process_group<const WORLD_SIZE: usize>(
-        group_name: &'static str,
+        group_name: &str,
         address: &str,
         devices: [crate::Device; WORLD_SIZE],
     ) -> [ProcessGroupNCCL; WORLD_SIZE] {
@@ -422,9 +564,16 @@ mod nccl_process_group {
         let handlers: [_; WORLD_SIZE] = std::array::from_fn(|i| {
             local_set.spawn_local({
                 let barrier = barrier.clone();
+                let group_name = group_name.to_owned();
                 async move {
                     let process_group = ProcessGroupNCCL::new(
-                        group_name, address, None, WORLD_SIZE, i, devices[i], None,
+                        &group_name,
+                        address,
+                        None,
+                        WORLD_SIZE,
+                        i,
+                        devices[i],
+                        None,
                     )
                     .await;
                     barrier.wait().await;
@@ -450,10 +599,73 @@ mod nccl_process_group {
         process_groups
     }
 
+    #[derive(Debug, Default)]
+    struct RankState {
+        input_tensors: Vec<Tensor>,
+        output_tensors: Vec<Tensor>,
+    }
+    impl RankState {
+        fn new(input_tensors: Vec<Tensor>, output_tensors: Vec<Tensor>) -> Self {
+            Self { input_tensors, output_tensors }
+        }
+
+        fn new_with_input(input_tensors: Vec<Tensor>) -> Self {
+            Self { input_tensors, output_tensors: Vec::new() }
+        }
+
+        fn new_with_output(output_tensors: Vec<Tensor>) -> Self {
+            Self { output_tensors, input_tensors: Vec::new() }
+        }
+    }
+
+    type GroupOper = Box<
+        dyn FnOnce(
+            ProcessGroupNCCL,
+            RankState,
+        ) -> Pin<Box<dyn Future<Output = TchResult<RankState>>>>,
+    >;
+
+    async fn collective_comm_test<const WORLD_SIZE: usize>(
+        rank_states: [RankState; WORLD_SIZE],
+        group_opers: [GroupOper; WORLD_SIZE],
+    ) -> [RankState; WORLD_SIZE] {
+        static TEST_COUNT: AtomicU64 = AtomicU64::new(0);
+        let group_name = format!("collective_comm_test_{}", TEST_COUNT.load(Ordering::Relaxed));
+        let address = format!("127.0.0.1:{}", 8080 + TEST_COUNT.fetch_add(1, Ordering::Relaxed));
+
+        let groups = create_process_group::<WORLD_SIZE>(
+            &group_name,
+            &address,
+            std::array::from_fn(crate::Device::Cuda),
+        )
+        .await;
+
+        let local_set = tokio::task::LocalSet::new();
+        let mut handlers = Vec::with_capacity(WORLD_SIZE);
+        groups.into_iter().zip(std::iter::zip(rank_states, group_opers)).for_each(
+            |(group, (rank_state, group_oper))| {
+                handlers.push(
+                    local_set.spawn_local(async move { group_oper(group, rank_state).await }),
+                );
+            },
+        );
+
+        let mut rank_states = std::array::from_fn(|_| Default::default());
+        for (i, handler) in handlers.into_iter().enumerate() {
+            let result = handler.await;
+            rank_states[i] = result
+                .context("failed to join the task")
+                .unwrap()
+                .context("failed to do communication")
+                .unwrap();
+        }
+
+        rank_states
+    }
+
     #[tokio::test]
     async fn init() {
-        crate::Cuda::device_count();
-        create_process_group::<2>(
+        create_process_group::<CUDA_DEVICE_COUNT>(
             "init_test",
             "127.0.0.1:8081",
             std::array::from_fn(crate::Device::Cuda),
@@ -479,50 +691,50 @@ mod nccl_process_group {
         .await;
     }
 
+    macro_rules! create_group_oper {
+        ($oper_closure_expr:expr) => {{
+            let oper: GroupOper = Box::new($oper_closure_expr);
+            oper
+        }};
+    }
     #[tokio::test]
-    async fn broadcast() -> anyhow::Result<()> {
-        const WORLD_SIZE: usize = 2;
-        let devices = std::array::from_fn(crate::Device::Cuda);
-
-        let src_tensor = crate::Tensor::rand([5, 5], (crate::Kind::Float, devices[0]));
-        let dst_tensors: Vec<_> = devices
-            .iter()
-            .skip(1)
-            .map(|device| crate::Tensor::zeros([5, 5], (crate::Kind::Float, *device)))
-            .collect();
-
-        let groups =
-            create_process_group::<WORLD_SIZE>("broadcast_test", "127.0.0.1:8080", devices).await;
-
-        let local_set = tokio::task::LocalSet::new();
-        let mut handlers = Vec::with_capacity(groups.len());
-
-        for (i, mut group) in groups.into_iter().enumerate() {
-            let handler = if i == 0 {
-                let tensor = src_tensor.shallow_clone();
-                local_set.spawn_local(async move { group.broadcast_send(&tensor).await })
+    async fn broadcast() {
+        let rank_states = std::array::from_fn(|rank| {
+            let shape = [5, 5];
+            let tensor_option = (Kind::Float, Device::Cuda(rank));
+            if rank == 0 {
+                RankState::new_with_input(vec![Tensor::rand(shape, tensor_option)])
             } else {
-                let mut tensor = dst_tensors[i - 1].shallow_clone();
-                local_set.spawn_local(async move { group.broadcast_receive(&mut tensor, 0).await })
-            };
-            handlers.push(handler);
-        }
-        local_set.await;
+                RankState::new_with_output(vec![Tensor::zeros(shape, tensor_option)])
+            }
+        });
 
-        for handler in handlers {
-            let result = handler.await;
-            result.context("failed to join the task")?.context("failed to broadcast")?;
-        }
+        let broadcast_rank = 0;
+        let opers = std::array::from_fn(move |rank| {
+            if rank == broadcast_rank {
+                create_group_oper!(move |mut group, rank_state| async move {
+                    group.broadcast_send(&rank_state.input_tensors[0]).await?;
+                    Ok(rank_state)
+                }
+                .boxed_local())
+            } else {
+                create_group_oper!(move |mut group, mut rank_state| async move {
+                    group
+                        .broadcast_receive(&mut rank_state.output_tensors[0], broadcast_rank)
+                        .await?;
+                    Ok(rank_state)
+                }
+                .boxed_local())
+            }
+        });
 
-        for dst_tensor in dst_tensors {
-            assert!(
-                src_tensor.equal(&dst_tensor),
-                "dst tensor is different with src tensor!\nsrc:{},dst:{}",
-                src_tensor,
-                dst_tensor
-            );
-        }
+        let rank_states = collective_comm_test::<CUDA_DEVICE_COUNT>(rank_states, opers).await;
+        let final_tensor = rank_states[broadcast_rank].input_tensors[0].shallow_clone();
 
-        Ok(())
+        if !rank_states.into_iter().enumerate().filter(|(rank, _)| *rank != broadcast_rank).all(
+            |(rank, state)| {
+                state.output_tensors[0].equal(&final_tensor.to_device(Device::Cuda(rank)))
+            },
+        ) {}
     }
 }
