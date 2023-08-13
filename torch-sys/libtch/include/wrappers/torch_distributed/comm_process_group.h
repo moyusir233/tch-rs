@@ -5,6 +5,7 @@
 #include <c10/util/intrusive_ptr.h>
 #include <c10/util/irange.h>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 
 #include <string>
@@ -131,6 +132,9 @@ struct ProcessGroupNCCLOptions {
 
 CREATE_CONTAINER_CLASS(_ArcProcessGroupNCCL, ProcessGroupNCCL)
 
+CREATE_PTR_ARRAY(Tensors, tensor)
+CREATE_PTR_ARRAY(DeviceIDs, std::int64_t)
+
 class ArcProcessGroupNCCL : public _ArcProcessGroupNCCL {
 private:
   // 用于实现clone的构造函数
@@ -141,16 +145,18 @@ private:
 
   // 用于clone Tensor指针
   std::vector<at::Tensor> clone_tensor_prt(const tensor &tensor) {
+    if (tensor == nullptr) {
+      return {};
+    }
     return {at::Tensor(*tensor)};
   }
 
   std::vector<std::vector<at::Tensor>>
-  clone_tensor_prt(const std::vector<tensor> &tensors) {
-    auto tensors_size = tensors.size();
+  clone_tensor_prt(const Tensors &tensors) {
     vector<vector<at::Tensor>> tensors_vec = {{}};
-    tensors_vec[0].reserve(tensors_size);
-    for (const auto i : c10::irange(tensors_size)) {
-      tensors_vec[0][i] = at::Tensor(*tensors[i]);
+    tensors_vec[0].reserve(tensors.size);
+    for (const auto i : c10::irange(tensors.size)) {
+      tensors_vec[0][i] = at::Tensor(*(tensors.ptr[i]));
     }
 
     return std::move(tensors_vec);
@@ -197,8 +203,8 @@ public:
   ArcWork reduce_(tensor tensor, std::int32_t dst_rank,
                   ReduceOp::RedOpType reduce_op) {
     auto reduce_opts = ReduceOptions{
-        .rootRank = dst_rank,
         .reduceOp = reduce_op,
+        .rootRank = dst_rank,
     };
 
     auto tensors = clone_tensor_prt(tensor);
@@ -206,8 +212,7 @@ public:
     return ArcWork(inner->reduce(tensors, reduce_opts));
   }
 
-  ArcWork all_gather_(tensor input_tensor,
-                      std::vector<tensor> &output_tensors) {
+  ArcWork all_gather_(tensor input_tensor, Tensors output_tensors) {
     auto input_tensors = clone_tensor_prt(input_tensor);
 
     auto output_tensors_vec = clone_tensor_prt(output_tensors);
@@ -217,15 +222,10 @@ public:
   }
 
   ArcWork all_gather_into_tensor_(tensor input_tensor, tensor output_tensor) {
-    auto input_tensor_clone = at::Tensor(*input_tensor);
-
-    auto output_tensor_clone = at::Tensor(*output_tensor);
-
-    return ArcWork(
-        inner->_allgather_base(output_tensor_clone, input_tensor_clone));
+    return ArcWork(inner->_allgather_base(*output_tensor, *input_tensor));
   }
 
-  ArcWork gather_(tensor input_tensor, std::vector<tensor> &output_tensors,
+  ArcWork gather_(tensor input_tensor, Tensors output_tensors,
                   std::int32_t dst_rank) {
     auto input_tensors = clone_tensor_prt(input_tensor);
 
@@ -236,7 +236,7 @@ public:
     return ArcWork(inner->gather(output_tensors_vec, input_tensors, opts));
   }
 
-  ArcWork scatter_(std::vector<tensor> &input_tensors, tensor output_tensor,
+  ArcWork scatter_(Tensors input_tensors, tensor output_tensor,
                    std::int32_t src_rank) {
     auto input_tensors_vec = clone_tensor_prt(input_tensors);
 
@@ -247,8 +247,8 @@ public:
     return ArcWork(inner->scatter(output_tensors, input_tensors_vec, opts));
   }
 
-  ArcWork reduce_scatter_(std::vector<tensor> &input_tensors,
-                          tensor output_tensor, ReduceOp::RedOpType reduce_op) {
+  ArcWork reduce_scatter_(Tensors input_tensors, tensor output_tensor,
+                          ReduceOp::RedOpType reduce_op) {
     auto input_tensors_vec = clone_tensor_prt(input_tensors);
 
     auto output_tensors = clone_tensor_prt(output_tensor);
@@ -261,25 +261,16 @@ public:
 
   ArcWork reduce_scatter_tensor_(tensor input_tensor, tensor output_tensor,
                                  ReduceOp::RedOpType reduce_op) {
-    auto input_tensor_clone = at::Tensor(*input_tensor);
-
-    auto output_tensor_clone = at::Tensor(*output_tensor);
-
     ReduceScatterOptions opts = {.reduceOp = reduce_op};
 
-    return ArcWork(inner->_reduce_scatter_base(output_tensor_clone,
-                                               input_tensor_clone, opts));
+    return ArcWork(
+        inner->_reduce_scatter_base(*output_tensor, *input_tensor, opts));
   }
 
   ArcWork all_to_all_single_(tensor input_tensor, tensor output_tensor,
                              std::vector<int64_t> &output_split_sizes,
                              std::vector<int64_t> &input_split_sizes) {
-
-    auto input_tensor_clone = at::Tensor(*input_tensor);
-
-    auto output_tensor_clone = at::Tensor(*output_tensor);
-
-    return ArcWork(inner->alltoall_base(output_tensor_clone, input_tensor_clone,
+    return ArcWork(inner->alltoall_base(*output_tensor, *input_tensor,
                                         output_split_sizes, input_split_sizes));
   }
 
@@ -291,8 +282,14 @@ public:
     return ArcWork(inner->alltoall(output_tensors, input_tensors));
   }
 
-  ArcWork barrier_(std::vector<int64_t> &device_ids) {
-    BarrierOptions opts = {.device_ids = device_ids};
+  ArcWork barrier_(const DeviceIDs device_ids) {
+    std::vector<std::int64_t> vec;
+    vec.reserve(device_ids.size);
+    for (const auto i : c10::irange(device_ids.size)) {
+      vec[i] = device_ids.ptr[i];
+    }
+
+    BarrierOptions opts = {.device_ids = vec};
     return ArcWork(inner->barrier(opts));
   }
 };

@@ -120,27 +120,15 @@ impl ProcessGroupNCCL {
         // 先利用store进行同步
         Self::store_based_barrier(store, world_size, timeout).await;
 
-        // 第一次broadcast时会造成阻塞,需要在其他blocking线程上进行
+        // 第一次进行nccl集合通信时时会造成阻塞,需要在其他blocking线程上进行
         tokio::task::spawn_blocking({
             let process_group = self.inner.clone();
             let device = self.device;
 
             move || {
                 let mut process_group = process_group.0;
-                let tensor = if rank == 0 {
-                    crate::Tensor::ones([3, 3], (crate::Kind::Int, device)) * (world_size as i64)
-                } else {
-                    crate::Tensor::zeros([3, 3], (crate::Kind::Int, device))
-                };
 
-                // 利用broadcast进行nccl comm的初始化与同步
-                let mut work = unsafe {
-                    process_group
-                        .pin_mut()
-                        .ArcProcessGroupNCCL_broadcast_(tensor.c_tensor, 0.into())
-                        .within_unique_ptr()
-                };
-
+                let mut work =  process_group.pin_mut().ArcProcessGroupNCCL_barrier_();
                 wait_work(&mut work).map_err(|err| {
                     TchError::Communication(format!(
                         "Failed to sync process group by nccl Broadcast communication, err: {err}"
