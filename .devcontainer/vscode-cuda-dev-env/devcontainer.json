@@ -3,11 +3,13 @@
 	// 在pytorch开发镜像的基础上配置了rust的编译工具
 	"name": "tch-rs-dev-env-vscode",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"build": {
-		"dockerfile": "Dockerfile",
-		// 修改 docker build的路径,方便将需要执行的脚本一次性拷贝到镜像中
-		"context": ".."
-	},
+	"image": "my-dev-env:latest",
+	// "build": {
+	// 	"dockerfile": "Dockerfile",
+	// 	// 修改 docker build的路径,方便将需要执行的脚本一次性拷贝到镜像中
+	// 	"context": "..",
+	// 	"cacheFrom": "my-dev-env:latest"
+	// },
 	"runArgs": [
 		"--gpus=all",
 		"--ipc=host"

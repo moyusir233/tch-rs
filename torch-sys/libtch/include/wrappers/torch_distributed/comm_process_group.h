@@ -6,6 +6,7 @@
 #include <c10/util/irange.h>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 
 #include <string>

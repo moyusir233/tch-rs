@@ -557,6 +557,9 @@ mod nccl_process_group {
         address: &str,
         devices: [crate::Device; WORLD_SIZE],
     ) -> [ProcessGroupNCCL; WORLD_SIZE] {
+        // 进行torch底层的全局初始化,包括日志等
+        crate::wrappers::utils::init_torch_module().expect("Failed to init torch module globally!");
+
         let local_set = tokio::task::LocalSet::new();
         let address = std::net::SocketAddr::from_str(address).unwrap();
         let barrier = Arc::new(tokio::sync::Barrier::new(WORLD_SIZE));
