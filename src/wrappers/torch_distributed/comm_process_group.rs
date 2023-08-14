@@ -568,9 +568,6 @@ mod nccl_process_group {
         address: &str,
         devices: [crate::Device; WORLD_SIZE],
     ) -> [ProcessGroupNCCL; WORLD_SIZE] {
-        // 进行torch底层的全局初始化,包括日志等
-        crate::wrappers::utils::init_torch_module().expect("Failed to init torch module globally!");
-
         let local_set = tokio::task::LocalSet::new();
         let address = std::net::SocketAddr::from_str(address).unwrap();
         let barrier = Arc::new(tokio::sync::Barrier::new(WORLD_SIZE));
@@ -651,6 +648,13 @@ mod nccl_process_group {
         group_opers: [Box<dyn GroupOperator>; WORLD_SIZE],
     ) -> [RankState; WORLD_SIZE] {
         static TEST_COUNT: AtomicU64 = AtomicU64::new(0);
+
+        if TEST_COUNT.load(Ordering::Relaxed) == 0 {
+            // 进行torch底层的全局初始化,包括日志等
+            crate::wrappers::utils::init_torch_module()
+                .expect("Failed to init torch module globally!");
+        }
+
         let group_name = format!("collective_comm_test_{}", TEST_COUNT.load(Ordering::Relaxed));
         let address = format!("127.0.0.1:{}", 8080 + TEST_COUNT.fetch_add(1, Ordering::Relaxed));
 
