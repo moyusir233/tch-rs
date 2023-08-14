@@ -27,4 +27,8 @@
         // 以动态链接的方式链接libtorch库,静态链接还有些问题
         "LIBTORCH_STATIC": "0"
     },
+    "rust-analyzer.cachePriming.numThreads": 10,
+    "rust-analyzer.checkOnSave": true,
+    "rust-analyzer.completion.limit": 128,
+    "rust-analyzer.check.command": "clippy",
 }
