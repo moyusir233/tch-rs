@@ -1,7 +1,7 @@
 // For format details, see https://aka.ms/devcontainer.json. 
 {
 	// 在pytorch开发镜像的基础上配置了rust的编译工具
-	"name": "tch-rs-dev-env-vscode",
+	"name": "tch-rs-test-cuda-env",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
 	"build": {
 		"dockerfile": "Dockerfile",
@@ -12,22 +12,8 @@
 		"--gpus=all",
 		"--ipc=host"
 	],
+	"postStartCommand": "export CARGO_TEST_CUDA_DEVICE_COUNT=2 && cargo test",
 	"hostRequirements": {
 		"gpu": true
-	},
-	"customizations": {
-		// Configure properties specific to VS Code.
-		// c++以及开发相关的插件,rust相关的插件已通过上面的feature进行了添加
-		"vscode": {
-			"extensions": [
-				"rust-lang.rust-analyzer",
-				"llvm-vs-code-extensions.vscode-clangd",
-				"ms-vscode.cmake-tools",
-				"go2sh.cmake-integration-vscode",
-				"albert.TabOut",
-				"redjue.git-commit-plugin",
-				"Gruntfuggly.todo-tree"
-			]
-		}
 	}
 }

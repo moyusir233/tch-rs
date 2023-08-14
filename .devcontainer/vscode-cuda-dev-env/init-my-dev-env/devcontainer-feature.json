@@ -1,6 +1,0 @@
-// 用于初始化开发tch-rs开发环境的dev-container-features
-{
-    "id": "init-my-dev-env",
-    "version": "1.0.0",
-    "name": "init-my-dev-env"
-}
