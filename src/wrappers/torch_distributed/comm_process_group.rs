@@ -66,14 +66,25 @@ impl IntoFuture for CppArc<ArcWork> {
     fn into_future(self) -> Self::IntoFuture {
         async move {
             let mut work = self.0;
-            // 在spawn blocking创建的阻塞线程上阻塞
-            tokio::task::spawn_blocking(move || {
+            #[cfg(nccl_blocking_wait)]
+            {
+                // 在spawn blocking创建的阻塞线程上阻塞
+                tokio::task::spawn_blocking(move || {
+                    wait_work(&mut work).map_err(|err| {
+                        TchError::Communication(format!(
+                            "Failed communication operation, err: {err}"
+                        ))
+                    })
+                })
+                .await
+                .expect("Failed to join blocking thread handler when wait work")
+            }
+            #[cfg(not(nccl_blocking_wait))]
+            {
                 wait_work(&mut work).map_err(|err| {
                     TchError::Communication(format!("Failed communication operation, err: {err}"))
                 })
-            })
-            .await
-            .expect("Failed to join blocking thread handler when wait work")
+            }
         }
     }
 }

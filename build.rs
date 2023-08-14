@@ -11,4 +11,7 @@ fn main() {
         }
         _ => {}
     }
+    if std::env::var("NCCL_BLOCKING_WAIT").is_ok() {
+        println!("cargo:rustc-cfg=nccl_blocking_wait");
+    }
 }
