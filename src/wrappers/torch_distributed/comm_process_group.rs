@@ -601,12 +601,12 @@ mod nccl_process_group {
     fn failed_init() {
         create_process_group::<1>(
             "init_test1",
-            "127.0.0.1:8081",
+            "127.0.0.1:7078",
             std::array::from_fn(crate::Device::Cuda),
         );
         create_process_group::<1>(
             "init_test1",
-            "127.0.0.1:8081",
+            "127.0.0.1:7078",
             std::array::from_fn(crate::Device::Cuda),
         );
     }

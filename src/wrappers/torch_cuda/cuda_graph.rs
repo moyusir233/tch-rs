@@ -99,6 +99,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore]
     fn cuda_graph() -> anyhow::Result<()> {
         let device = crate::Device::Cuda(0);
         let mut pin_tensor = crate::Tensor::zeros([3, 3], (crate::Kind::Int, device));

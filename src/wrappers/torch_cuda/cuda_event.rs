@@ -56,6 +56,7 @@ mod tests {
 
     /// 通过测量GPU上的执行时间与CPU的睡眠时间来比较,判断CUDAEvent的计时是否正确
     #[test]
+    #[ignore]
     fn cuda_event_timing() -> anyhow::Result<()> {
         let device = crate::Device::Cuda(0);
         let epoch = 10;

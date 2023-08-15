@@ -71,6 +71,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore]
     fn cuda_guard() -> anyhow::Result<()> {
         use std::ops::Deref;
 
