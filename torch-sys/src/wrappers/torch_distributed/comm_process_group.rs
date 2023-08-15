@@ -76,11 +76,11 @@ impl CppArcClone for ArcWork {
 macro_rules! impl_from_slice_to_ptr_array {
     ($ptr_ty:ty,$impl_target_ty:ty) => {
         impl From<&[$ptr_ty]> for $impl_target_ty {
-            fn from(value: &[$ptr_ty]) -> Self {
-                if value.is_empty() {
+            fn from(s: &[$ptr_ty]) -> Self {
+                if s.is_empty() {
                     return Self { ptr: std::ptr::null_mut(), size: 0 };
                 }
-                Self { ptr: value.as_ptr() as *mut $ptr_ty, size: value.len() as u64 }
+                Self { ptr: s.as_ptr() as *mut $ptr_ty, size: s.len() as u64 }
             }
         }
     };

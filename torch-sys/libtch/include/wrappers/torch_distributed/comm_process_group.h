@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <iostream>
 #include <memory>
 
 #include <string>
@@ -35,17 +36,17 @@ public:
   explicit ArcWork(c10::intrusive_ptr<Work> &&work)
       : _ArcWork(std::forward<c10::intrusive_ptr<Work>>(work)) {}
 
-  ArcWork clone_() const { return ArcWork(inner); }
+  [[nodiscard]] ArcWork clone_() const { return ArcWork(inner); }
 
   // Checks if request has completed. Non-blocking operation.
   bool is_completed() { return inner->isCompleted(); }
 
   // Returns if the work completed successfully.
   // If false, the exception function can be called to get details.
-  bool is_success() const { return inner->isSuccess(); }
+  [[nodiscard]] bool is_success() const { return inner->isSuccess(); }
 
   // Returns exception if isSuccess() returned false.
-  const char *exception() const {
+  [[nodiscard]] const char *exception() const {
     auto exception_ptr = inner->exception();
     const char *err_msg = nullptr;
 
@@ -61,7 +62,7 @@ public:
   }
 
   // Returns source rank if this objects represents a recv-from-any.
-  int source_rank() const { return inner->sourceRank(); }
+  [[nodiscard]] int source_rank() const { return inner->sourceRank(); }
 
   // Returns result tensors, if applicable.
   // If work is not supposed to have result, we return empty list.
@@ -145,18 +146,18 @@ private:
             c10::intrusive_ptr<ProcessGroupNCCL>(process_group)) {}
 
   // 用于clone Tensor指针
-  std::vector<at::Tensor> clone_tensor_prt(const tensor &tensor) {
+  static std::vector<at::Tensor> clone_tensor_prt(const tensor &tensor) {
     if (tensor == nullptr) {
       return {};
     }
     return {at::Tensor(*tensor)};
   }
 
-  std::vector<std::vector<at::Tensor>>
+  static std::vector<std::vector<at::Tensor>>
   clone_tensor_prt(const Tensors &tensors) {
-    vector<vector<at::Tensor>> tensors_vec = {{}};
-    tensors_vec[0].reserve(tensors.size);
-    for (const auto i : c10::irange(tensors.size)) {
+    vector<vector<at::Tensor>> tensors_vec = {
+        std::vector<at::Tensor>(tensors.size)};
+    for (const auto &i : c10::irange(tensors.size)) {
       tensors_vec[0][i] = at::Tensor(*(tensors.ptr[i]));
     }
 
@@ -178,7 +179,9 @@ public:
             store.inner, rank, size,
             (c10::intrusive_ptr<ProcessGroupNCCL::Options>)options)) {}
 
-  ArcProcessGroupNCCL clone_() const { return ArcProcessGroupNCCL(inner); }
+  [[nodiscard]] ArcProcessGroupNCCL clone_() const {
+    return ArcProcessGroupNCCL(inner);
+  }
 
   void set_sequence_number_for_group() { inner->setSequenceNumberForGroup(); }
 

@@ -14,6 +14,8 @@
         "--fallback-style=LLVM",
         // 允许补充当前编写的头文件
         "--header-insertion=iwyu",
+        // 全局补全（会自动补充头文件）
+        "--all-scopes-completion",
         // pch优化的位置
         "--pch-storage=memory",
         "--ranking-model=heuristics",

@@ -51,7 +51,7 @@ fn check_group_name_and_device(group_name: &str, device: crate::Device) {
 /// 一次集合通信操作涉及到最多8个张量
 const MAX_SMALL_VEC_SIZE: u8 = 8;
 #[inline]
-fn to_small_vec(
+fn to_tensor_ptr_small_vec(
     tensors: &[Tensor],
 ) -> SmallVec<[*mut torch_sys::C_tensor; MAX_SMALL_VEC_SIZE as usize]> {
     tensors.iter().map(|tensor| tensor.c_tensor).collect()
@@ -301,7 +301,7 @@ impl ProcessGroupNCCL {
         wait_work!(unsafe {
             self.inner.pin_mut().ArcProcessGroupNCCL_all_gather_(
                 input_tensor.c_tensor,
-                to_small_vec(output_tensors).as_slice().into(),
+                to_tensor_ptr_small_vec(output_tensors).as_slice().into(),
             )
         })
     }
@@ -349,7 +349,7 @@ impl ProcessGroupNCCL {
     ) -> TchResult<()> {
         self._gather(
             input_tensor.c_tensor,
-            to_small_vec(output_tensors.as_mut()).as_slice().into(),
+            to_tensor_ptr_small_vec(output_tensors.as_mut()).as_slice().into(),
             self.rank,
         )
     }
@@ -381,7 +381,7 @@ impl ProcessGroupNCCL {
         check_tensor_device!(output_tensor, self.device);
 
         self._scatter(
-            to_small_vec(input_tensors).as_slice().into(),
+            to_tensor_ptr_small_vec(input_tensors).as_slice().into(),
             output_tensor.c_tensor,
             self.rank,
         )
@@ -408,7 +408,7 @@ impl ProcessGroupNCCL {
 
         wait_work!(unsafe {
             self.inner.pin_mut().ArcProcessGroupNCCL_reduce_scatter_(
-                to_small_vec(input_tensors).as_slice().into(),
+                to_tensor_ptr_small_vec(input_tensors).as_slice().into(),
                 output_tensor.c_tensor,
                 reduce_op,
             )
@@ -469,8 +469,8 @@ impl ProcessGroupNCCL {
         batch_check_tensor_device!(output_tensors, self.device);
 
         wait_work!(self.inner.pin_mut().ArcProcessGroupNCCL_alltoall_(
-            to_small_vec(input_tensors).as_slice().into(),
-            to_small_vec(output_tensors).as_slice().into(),
+            to_tensor_ptr_small_vec(input_tensors).as_slice().into(),
+            to_tensor_ptr_small_vec(output_tensors).as_slice().into(),
         ))
     }
 
@@ -482,7 +482,6 @@ impl ProcessGroupNCCL {
     }
 }
 
-// FIXME 多个测试同时进行就会失败,但单个测试没有问题?
 #[cfg(test)]
 mod nccl_process_group {
     use crate::{Device, Kind};
@@ -493,7 +492,7 @@ mod nccl_process_group {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const CUDA_DEVICE_COUNT_STR: &str =
-        konst::option::unwrap_or!(option_env!("CARGO_TEST_CUDA_DEVICE_COUNT"), "2");
+        konst::option::unwrap_or!(option_env!("CARGO_TEST_CUDA_DEVICE_COUNT"), "1");
 
     const CUDA_DEVICE_COUNT: usize =
         konst::unwrap_ctx!(konst::primitive::parse_usize(CUDA_DEVICE_COUNT_STR));
@@ -563,8 +562,8 @@ mod nccl_process_group {
                 .expect("Failed to init torch module globally!");
         }
 
-        let group_name = format!("collective_comm_test_{}", TEST_COUNT.load(Ordering::Relaxed));
-        let address = format!("127.0.0.1:{}", 8080 + TEST_COUNT.fetch_add(1, Ordering::Relaxed));
+        let group_name = format!("collective_comm_test_{}", TEST_COUNT.fetch_add(1,Ordering::Relaxed));
+        let address = format!("127.0.0.1:{}", 8080 + TEST_COUNT.load(Ordering::Relaxed));
 
         let groups = create_process_group::<WORLD_SIZE>(
             &group_name,
@@ -597,11 +596,9 @@ mod nccl_process_group {
         );
     }
 
-    #[ignore]
     #[should_panic]
     #[test]
     fn failed_init() {
-        crate::Cuda::device_count();
         create_process_group::<1>(
             "init_test1",
             "127.0.0.1:8081",
@@ -779,9 +776,7 @@ mod nccl_process_group {
     }
 
     #[test]
-    #[ignore]
     fn all_gather() {
-        // FIXME 地址存在越界访问
         struct AllGatherRank;
         impl GroupOperator for AllGatherRank {
             fn handle(
