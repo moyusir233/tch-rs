@@ -32,5 +32,5 @@
     "rust-analyzer.cachePriming.numThreads": 10,
     "rust-analyzer.checkOnSave": true,
     "rust-analyzer.completion.limit": 128,
-    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.command": "check",
 }
