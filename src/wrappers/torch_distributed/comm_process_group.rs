@@ -567,6 +567,7 @@ mod nccl_process_group {
         }};
     }
 
+    #[allow(invalid_value)]
     fn collective_comm_test<F1, F2, const WORLD_SIZE: usize>(
         create_rank_state: F1,
         create_group_oper: F2,
@@ -597,11 +598,13 @@ mod nccl_process_group {
             let rank_state = create_rank_state(rank);
             let mut group_oper = create_group_oper(rank);
             let group = std::mem::replace(&mut groups[rank], unsafe {
-                std::mem::transmute([0_u8; std::mem::size_of::<ProcessGroupNCCL>()])
+                // Safety: 后续利用了std::mem::forget避免了在未初始化的值上调用drop
+                std::mem::MaybeUninit::uninit().assume_init()
             });
             std::thread::spawn(move || group_oper.handle(group, rank_state))
         });
-        drop(groups);
+        // groups中的元素都被未初始化的值所替代了,因此不再需要drop
+        std::mem::forget(groups);
 
         let mut rank_states = std::array::from_fn(|_| Default::default());
         for (i, handler) in handlers.into_iter().enumerate() {
