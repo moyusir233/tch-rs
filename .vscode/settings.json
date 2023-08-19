@@ -33,4 +33,6 @@
     "rust-analyzer.checkOnSave": true,
     "rust-analyzer.completion.limit": 128,
     "rust-analyzer.check.command": "check",
+    "rust-analyzer.cargo.buildScripts.invocationLocation": "root",
+    "rust-analyzer.cargo.buildScripts.invocationStrategy": "once",
 }

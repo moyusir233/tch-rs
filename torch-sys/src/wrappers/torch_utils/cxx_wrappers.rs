@@ -8,7 +8,7 @@ pub mod ffi {
 
         /// 进行libtorch所需的一些全局初始化工作,比如初始化日志等,
         /// 参考torch/csrc/Module.cpp
-        fn init_torch_module()->Result<()>;
+        fn init_torch_module() -> Result<()>;
 
         /// 释放pytorch底层维护缓存池的缓存
         fn empty_cache() -> Result<()>;

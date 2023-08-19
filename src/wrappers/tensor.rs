@@ -359,6 +359,7 @@ impl Tensor {
     /// presence of infinite values. `inv_scale` is a scalar containing
     /// the inverse scaling factor. This method is only available
     /// for CUDA tensors.
+    #[allow(clippy::needless_pass_by_ref_mut)]
     pub fn f_internal_amp_non_finite_check_and_unscale(
         &mut self,
         found_inf: &mut Tensor,

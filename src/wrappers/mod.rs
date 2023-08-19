@@ -20,6 +20,6 @@ pub(crate) mod tensor;
 pub(crate) mod tensor_fallible_generated;
 pub(crate) mod tensor_generated;
 
+pub mod cxx_wrappers_utils;
 pub mod torch_cuda;
 pub mod torch_distributed;
-pub mod cxx_wrappers_utils;

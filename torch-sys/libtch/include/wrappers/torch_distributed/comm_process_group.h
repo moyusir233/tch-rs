@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <iostream>
 #include <memory>
 
@@ -145,23 +146,87 @@ private:
       : _ArcProcessGroupNCCL(
             c10::intrusive_ptr<ProcessGroupNCCL>(process_group)) {}
 
-  // 用于clone Tensor指针
-  static std::vector<at::Tensor> clone_tensor_prt(const tensor &tensor) {
-    if (tensor == nullptr) {
-      return {};
+  // 用于重用vector
+  template <class T> class ObjectPool {
+  private:
+    std::vector<T> pool;
+    std::function<T()> create_object;
+    std::uint64_t cursor = 0;
+
+    T &get_object() {
+      // 扩容
+      if (cursor == pool.size()) {
+        pool.emplace_back(create_object());
+      }
+
+      auto obj = pool.begin() + cursor;
+      cursor += 1;
+      return *obj;
     }
-    return {at::Tensor(*tensor)};
+
+    void return_object() { cursor -= 1; }
+
+  public:
+    class ObjectWrapper {
+    private:
+      ObjectPool<T> &parent;
+
+    public:
+      T &inner;
+
+      explicit ObjectWrapper(ObjectPool<T> &parent_pool)
+          : parent(parent_pool), inner(parent_pool.get_object()) {}
+
+      operator T &() const { return inner; }
+
+      ~ObjectWrapper() { parent.return_object(); }
+    };
+
+    explicit ObjectPool(std::function<T()> &&create_object_fn)
+        : create_object(create_object_fn) {}
+
+    ObjectWrapper get_object_wrapper() { return ObjectWrapper(*this); }
+  };
+
+  // IMPROVE:
+  // 每次调用集合通信相关的api就需要创建新的vector,造成频繁的堆内存申请,如何改善?
+  // 用于clone Tensor指针
+  static ObjectPool<std::vector<at::Tensor>>::ObjectWrapper
+  clone_tensor_prt(const tensor &tensor) {
+    thread_local ObjectPool<std::vector<at::Tensor>> tensor_vec_pool(
+        std::function<std::vector<at::Tensor>()>(
+            []() { return std::vector<at::Tensor>(); }));
+
+    auto obj = tensor_vec_pool.get_object_wrapper();
+    obj.inner.clear();
+
+    if (tensor == nullptr) {
+      return obj;
+    }
+
+    obj.inner.emplace_back(*tensor);
+
+    return obj;
   }
 
-  static std::vector<std::vector<at::Tensor>>
+  static ObjectPool<std::vector<std::vector<at::Tensor>>>::ObjectWrapper
   clone_tensor_prt(const Tensors &tensors) {
-    vector<vector<at::Tensor>> tensors_vec = {
-        std::vector<at::Tensor>(tensors.size)};
+    thread_local ObjectPool<std::vector<std::vector<at::Tensor>>>
+        tensor_vec_pool(std::function<std::vector<std::vector<at::Tensor>>()>(
+            []() { return std::vector<std::vector<at::Tensor>>(); }));
+
+    auto obj = tensor_vec_pool.get_object_wrapper();
+    if (obj.inner.empty()) {
+      obj.inner.emplace_back();
+    }
+    obj.inner[0].clear();
+
+    obj.inner[0].reserve(tensors.size);
     for (const auto &i : c10::irange(tensors.size)) {
-      tensors_vec[0][i] = at::Tensor(*(tensors.ptr[i]));
+      obj.inner[0].emplace_back(at::Tensor(*(tensors.ptr[i])));
     }
 
-    return std::move(tensors_vec);
+    return obj;
   }
 
 public:
@@ -185,7 +250,7 @@ public:
 
   void set_sequence_number_for_group() { inner->setSequenceNumberForGroup(); }
 
-  ArcWork broadcast_(tensor tensor, std::int32_t src_rank) {
+  ArcWork broadcast_(tensor tensor, std::int64_t src_rank) {
     BroadcastOptions opts = {
         .rootRank = src_rank,
         .rootTensor = 0,
@@ -204,7 +269,7 @@ public:
     return ArcWork(inner->allreduce(tensors, all_reduce_opts));
   }
 
-  ArcWork reduce_(tensor tensor, std::int32_t dst_rank,
+  ArcWork reduce_(tensor tensor, std::int64_t dst_rank,
                   ReduceOp::RedOpType reduce_op) {
     auto reduce_opts = ReduceOptions{
         .reduceOp = reduce_op,
@@ -230,7 +295,7 @@ public:
   }
 
   ArcWork gather_(tensor input_tensor, Tensors output_tensors,
-                  std::int32_t dst_rank) {
+                  std::int64_t dst_rank) {
     auto input_tensors = clone_tensor_prt(input_tensor);
 
     auto output_tensors_vec = clone_tensor_prt(output_tensors);
@@ -241,7 +306,7 @@ public:
   }
 
   ArcWork scatter_(Tensors input_tensors, tensor output_tensor,
-                   std::int32_t src_rank) {
+                   std::int64_t src_rank) {
     auto input_tensors_vec = clone_tensor_prt(input_tensors);
 
     auto output_tensors = clone_tensor_prt(output_tensor);
@@ -286,11 +351,12 @@ public:
   }
 
   ArcWork alltoall_(Tensors input_tensors, Tensors output_tensors) {
-    auto input_tensors_vec = clone_tensor_prt(input_tensors)[0];
+    auto input_tensors_vec = clone_tensor_prt(input_tensors).inner;
 
-    auto output_tensors_vec = clone_tensor_prt(output_tensors)[0];
+    auto output_tensors_vec = clone_tensor_prt(output_tensors).inner;
 
-    return ArcWork(inner->alltoall(output_tensors_vec, input_tensors_vec));
+    return ArcWork(
+        inner->alltoall(output_tensors_vec.front(), input_tensors_vec.front()));
   }
 
   ArcWork barrier_(const I64List device_ids) {
@@ -300,8 +366,17 @@ public:
     BarrierOptions opts = {.device_ids = vec};
     return ArcWork(inner->barrier(opts));
   }
-};
 
+  ArcWork send_(tensor tensor, std::int64_t dst_rank) {
+    auto input_tensors = clone_tensor_prt(tensor);
+    return ArcWork(inner->send(input_tensors, dst_rank, 0));
+  }
+
+  ArcWork receive_(tensor tensor, std::int64_t src_rank) {
+    auto output_tensors = clone_tensor_prt(tensor);
+    return ArcWork(inner->recv(output_tensors, src_rank, 0));
+  }
+};
 } // namespace c10d
 
 #endif // TCH_TORCH_PROCESS_GROUP_NCCL_H

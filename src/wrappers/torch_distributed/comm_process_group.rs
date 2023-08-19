@@ -60,13 +60,22 @@ fn to_tensor_ptr_small_vec(
     tensors.iter().map(|tensor| tensor.c_tensor).collect()
 }
 
-/// 对[`ArcProcessGroupNCCL`]的进一步封装,
+/// 对[`ArcProcessGroupNCCL`]的进一步封装.
+/// 其中实现的所有集合通信操作都是阻塞的，任意的集合通信调用都会造成
+/// 所有`ProcessGroupNCCL`所在的cpu线程进行一次阻塞式的同步(GPU不会,只是会将nccl通信操作发送到stream中).
+/// 具体来说，比如在调用all_reduce时，
+/// 所有的rank将会阻塞直到所有的rank都将nccl通信操作发送到相应的cuda stream上,
+/// 然后利用底层集合通信c++ api返回的`Work`实例上的wait函数，让当前stream上的计算等待
+/// nccl stream上的操作完成,
+/// 因此是nccl集合通信操作本身是阻塞的(尽管可以创建async的ncclComms,不过目前pytorch底层没有封装相关的api),
+/// 造成了上层的这些rust接口是阻塞的,而`Work`的wait函数的调用并不会阻塞cpu线程，只是会进行cuda stream上的
+/// 同步操作
 #[allow(dead_code)]
 pub struct ProcessGroupNCCL {
     inner: CppArc<ArcProcessGroupNCCL>,
     pub group_name: String,
     pub world_size: usize,
-    pub rank: usize,
+    pub rank: i64,
     pub address: std::net::SocketAddr,
     pub device: crate::Device,
 }
@@ -166,13 +175,13 @@ impl ProcessGroupNCCL {
         address: std::net::SocketAddr,
         timeout: Option<Duration>,
         world_size: usize,
-        rank: usize,
+        rank: i64,
         device: crate::Device,
         opts: Option<ProcessGroupNCCLOptions>,
     ) -> Self {
         assert_ne!(world_size, 0, "The world_size of ProcessGroup must greater than zero!");
         assert!(
-            rank < world_size,
+            rank < world_size as i64,
             "The rank:{} must not greater than the world_size:{}!",
             rank,
             world_size
@@ -225,9 +234,9 @@ impl ProcessGroupNCCL {
     }
 
     /// 使用包装的ArcProcessGroupNCCL进行广播通信
-    fn _broadcast(&mut self, tensor: *mut torch_sys::C_tensor, src_rank: usize) -> TchResult<()> {
+    fn _broadcast(&mut self, tensor: *mut torch_sys::C_tensor, src_rank: i64) -> TchResult<()> {
         wait_work!(unsafe {
-            self.inner.pin_mut().ArcProcessGroupNCCL_broadcast_(tensor, (src_rank as i32).into())
+            self.inner.pin_mut().ArcProcessGroupNCCL_broadcast_(tensor, src_rank.into())
         })
     }
 
@@ -240,7 +249,7 @@ impl ProcessGroupNCCL {
 
     /// 广播接收操作，从src_rank接收张量，并写入到传入的张量当中
     #[allow(clippy::needless_pass_by_ref_mut)]
-    pub fn broadcast_receive(&mut self, tensor: &mut Tensor, src_rank: usize) -> TchResult<()> {
+    pub fn broadcast_receive(&mut self, tensor: &mut Tensor, src_rank: i64) -> TchResult<()> {
         check_tensor_device!(tensor, self.device);
 
         self._broadcast(tensor.c_tensor, src_rank)
@@ -259,15 +268,11 @@ impl ProcessGroupNCCL {
     fn _reduce(
         &mut self,
         tensor: *mut torch_sys::C_tensor,
-        dst_rank: usize,
+        dst_rank: i64,
         reduce_op: ReduceOp,
     ) -> TchResult<()> {
         wait_work!(unsafe {
-            self.inner.pin_mut().ArcProcessGroupNCCL_reduce_(
-                tensor,
-                (dst_rank as i32).into(),
-                reduce_op,
-            )
+            self.inner.pin_mut().ArcProcessGroupNCCL_reduce_(tensor, dst_rank.into(), reduce_op)
         })
     }
 
@@ -275,7 +280,7 @@ impl ProcessGroupNCCL {
     pub fn reduce_send(
         &mut self,
         tensor: &Tensor,
-        dst_rank: usize,
+        dst_rank: i64,
         reduce_op: ReduceOp,
     ) -> TchResult<()> {
         check_tensor_device!(tensor, self.device);
@@ -330,18 +335,18 @@ impl ProcessGroupNCCL {
         &mut self,
         input_tensor: *mut torch_sys::C_tensor,
         output_tensors: Tensors,
-        dst_rank: usize,
+        dst_rank: i64,
     ) -> TchResult<()> {
         wait_work!(unsafe {
             self.inner.pin_mut().ArcProcessGroupNCCL_gather_(
                 input_tensor,
                 output_tensors,
-                (dst_rank as i32).into(),
+                dst_rank.into(),
             )
         })
     }
 
-    pub fn gather_send(&mut self, input_tensor: &Tensor, dst_rank: usize) -> TchResult<()> {
+    pub fn gather_send(&mut self, input_tensor: &Tensor, dst_rank: i64) -> TchResult<()> {
         self._gather(input_tensor.c_tensor, [].as_slice().into(), dst_rank)
     }
 
@@ -361,13 +366,13 @@ impl ProcessGroupNCCL {
         &mut self,
         input_tensors: Tensors,
         output_tensor: *mut torch_sys::C_tensor,
-        src_rank: usize,
+        src_rank: i64,
     ) -> TchResult<()> {
         wait_work!(unsafe {
             self.inner.pin_mut().ArcProcessGroupNCCL_scatter_(
                 input_tensors,
                 output_tensor,
-                (src_rank as i32).into(),
+                src_rank.into(),
             )
         })
     }
@@ -391,11 +396,7 @@ impl ProcessGroupNCCL {
     }
 
     #[allow(clippy::needless_pass_by_ref_mut)]
-    pub fn scatter_receive(
-        &mut self,
-        output_tensor: &mut Tensor,
-        src_rank: usize,
-    ) -> TchResult<()> {
+    pub fn scatter_receive(&mut self, output_tensor: &mut Tensor, src_rank: i64) -> TchResult<()> {
         check_tensor_device!(output_tensor, self.device);
 
         self._scatter([].as_slice().into(), output_tensor.c_tensor, src_rank)
@@ -481,11 +482,29 @@ impl ProcessGroupNCCL {
         ))
     }
 
+    /// 进行cpu线程以及gpu cuda stream的同步
     pub fn barrier(&mut self) -> TchResult<()> {
         wait_work!(self
             .inner
             .pin_mut()
             .ArcProcessGroupNCCL_barrier_([self.device.c_int().into()].as_slice().into()))
+    }
+
+    pub fn send(&mut self, input_tensor: &Tensor, dst_rank: i64) -> TchResult<()> {
+        check_tensor_device!(input_tensor, self.device);
+        wait_work!(unsafe {
+            self.inner.pin_mut().ArcProcessGroupNCCL_send_(input_tensor.c_tensor, dst_rank.into())
+        })
+    }
+
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    pub fn receive(&mut self, output_tensor: &mut Tensor, src_rank: i64) -> TchResult<()> {
+        check_tensor_device!(output_tensor, self.device);
+        wait_work!(unsafe {
+            self.inner
+                .pin_mut()
+                .ArcProcessGroupNCCL_receive_(output_tensor.c_tensor, src_rank.into())
+        })
     }
 }
 
@@ -514,7 +533,15 @@ mod nccl_process_group {
         let mut handlers: [_; WORLD_SIZE] = std::array::from_fn(|i| {
             let group_name = group_name.to_owned();
             Some(std::thread::spawn(move || {
-                ProcessGroupNCCL::new(&group_name, address, None, WORLD_SIZE, i, devices[i], None)
+                ProcessGroupNCCL::new(
+                    &group_name,
+                    address,
+                    None,
+                    WORLD_SIZE,
+                    i as i64,
+                    devices[i],
+                    None,
+                )
             }))
         });
 
@@ -644,7 +671,7 @@ mod nccl_process_group {
     fn broadcast() {
         struct BroadcastSender;
         struct BroadcastReceiver {
-            src_rank: usize,
+            src_rank: i64,
         }
 
         impl GroupOperator for BroadcastSender {
@@ -687,7 +714,9 @@ mod nccl_process_group {
                 if rank == broadcast_rank {
                     create_box_group_operator!(BroadcastSender)
                 } else {
-                    create_box_group_operator!(BroadcastReceiver { src_rank: broadcast_rank })
+                    create_box_group_operator!(BroadcastReceiver {
+                        src_rank: broadcast_rank as i64
+                    })
                 }
             },
         );
@@ -711,27 +740,32 @@ mod nccl_process_group {
 
     #[test]
     fn all_reduce() {
-        struct AllReduceRank;
+        struct AllReduceRank {
+            reduce_count: usize,
+        }
         impl GroupOperator for AllReduceRank {
             fn handle(
                 &mut self,
                 mut process_group: ProcessGroupNCCL,
                 mut rank_state: RankState,
             ) -> TchResult<RankState> {
-                process_group.all_reduce(&mut rank_state.input_tensors[0], ReduceOp::SUM)?;
+                for _ in 0..self.reduce_count {
+                    process_group.all_reduce(&mut rank_state.input_tensors[0], ReduceOp::SUM)?;
+                }
                 Ok(rank_state)
             }
         }
 
         let shape = [5, 5];
         let kind = Kind::Float;
+        let reduce_count = 5;
         let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
             |rank| RankState::default().add_input(Tensor::ones(shape, (kind, Device::Cuda(rank)))),
-            |_rank| create_box_group_operator!(AllReduceRank),
+            |_rank| create_box_group_operator!(AllReduceRank { reduce_count }),
         );
 
-        let expected_tensor =
-            Tensor::ones(shape, (kind, Device::Cuda(0))) * CUDA_DEVICE_COUNT as i64;
+        let expected_tensor = Tensor::ones(shape, (kind, Device::Cuda(0)))
+            * (CUDA_DEVICE_COUNT.pow(reduce_count as u32)) as i64;
         for (rank, output) in rank_states
             .into_iter()
             .map(|mut state| std::mem::take(&mut state.input_tensors[0]))
@@ -744,7 +778,7 @@ mod nccl_process_group {
     #[test]
     fn reduce() {
         struct ReduceSender {
-            dst_rank: usize,
+            dst_rank: i64,
         }
         struct ReduceReceiver;
 
@@ -787,7 +821,7 @@ mod nccl_process_group {
                 if rank == dst_rank {
                     create_box_group_operator!(ReduceReceiver)
                 } else {
-                    create_box_group_operator!(ReduceSender { dst_rank })
+                    create_box_group_operator!(ReduceSender { dst_rank: dst_rank as i64 })
                 }
             },
         );
@@ -902,7 +936,7 @@ mod nccl_process_group {
     #[test]
     fn gather() {
         struct GatherSender {
-            dst_rank: usize,
+            dst_rank: i64,
         }
         struct GatherReceiver;
 
@@ -949,7 +983,7 @@ mod nccl_process_group {
                 if rank == dst_rank {
                     create_box_group_operator!(GatherReceiver)
                 } else {
-                    create_box_group_operator!(GatherSender { dst_rank })
+                    create_box_group_operator!(GatherSender { dst_rank: dst_rank as i64 })
                 }
             },
         );
@@ -973,7 +1007,7 @@ mod nccl_process_group {
     fn scatter() {
         struct ScatterSender;
         struct ScatterReceiver {
-            src_rank: usize,
+            src_rank: i64,
         }
 
         impl GroupOperator for ScatterSender {
@@ -1020,7 +1054,7 @@ mod nccl_process_group {
                 if rank == src_rank {
                     create_box_group_operator!(ScatterSender)
                 } else {
-                    create_box_group_operator!(ScatterReceiver { src_rank })
+                    create_box_group_operator!(ScatterReceiver { src_rank: src_rank as i64 })
                 }
             },
         );
@@ -1222,5 +1256,67 @@ mod nccl_process_group {
             "Output tensors: {output_tensors:?} is different with expected tensors: {expected_tensors:?}"
             )
         }
+    }
+
+    #[test]
+    fn p2p() {
+        assert!(CUDA_DEVICE_COUNT >= 2);
+
+        struct Sender {
+            dst_rank: i64,
+        }
+        struct Receiver {
+            src_rank: i64,
+        }
+
+        impl GroupOperator for Sender {
+            fn handle(
+                &mut self,
+                mut process_group: ProcessGroupNCCL,
+                rank_state: RankState,
+            ) -> TchResult<RankState> {
+                process_group.send(&rank_state.input_tensors[0], self.dst_rank)?;
+                Ok(rank_state)
+            }
+        }
+        impl GroupOperator for Receiver {
+            fn handle(
+                &mut self,
+                mut process_group: ProcessGroupNCCL,
+                mut rank_state: RankState,
+            ) -> TchResult<RankState> {
+                process_group.receive(&mut rank_state.output_tensors[0], self.src_rank)?;
+                Ok(rank_state)
+            }
+        }
+
+        let src_rank: i64 = 0;
+        let dst_rank: i64 = 1;
+        let shape = [5, 5];
+        let kind = Kind::Float;
+        let rank_states = collective_comm_test::<_, _, 2>(
+            |rank| {
+                if rank == src_rank as usize {
+                    RankState::default().add_input(Tensor::ones(shape, (kind, Device::Cuda(rank))))
+                } else {
+                    RankState::default()
+                        .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
+                }
+            },
+            |rank| {
+                if rank == src_rank as usize {
+                    create_box_group_operator!(Sender { dst_rank })
+                } else {
+                    create_box_group_operator!(Receiver { src_rank })
+                }
+            },
+        );
+
+        let expected_tensor = Tensor::ones(shape, (kind, Device::Cuda(dst_rank as usize)));
+        let output_tensor = &rank_states[dst_rank as usize].output_tensors[0];
+
+        assert!(output_tensor.equal(&expected_tensor),
+                "Output tensors: {output_tensor:?} is different with expected tensors: {expected_tensor:?}"
+            )
     }
 }
