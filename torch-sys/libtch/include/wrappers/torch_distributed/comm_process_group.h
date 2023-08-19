@@ -154,15 +154,15 @@ private:
     std::function<T()> create_object;
     std::uint64_t cursor = 0;
 
-    T &get_object() {
+    T *get_object() {
       // 扩容
       if (cursor == pool.size()) {
-        pool.emplace_back(create_object());
+        pool.push_back(create_object());
       }
 
-      auto obj = pool.begin() + cursor;
+      T &obj = pool[cursor];
       cursor += 1;
-      return *obj;
+      return &obj;
     }
 
     void return_object() { cursor -= 1; }
@@ -189,35 +189,42 @@ private:
       ObjectPool<vector<at::Tensor>> &parent;
 
     public:
-      vector<at::Tensor> &inner;
+      vector<at::Tensor> *inner;
 
       explicit ObjectWrapper(ObjectPool<vector<at::Tensor>> &parent_pool)
           : parent(parent_pool), inner(parent_pool.get_object()) {}
 
-      operator vector<at::Tensor> &() const { return inner; }
+      operator vector<at::Tensor> &() const { return *inner; }
 
       ~ObjectWrapper() {
-        inner.clear();
+        inner->clear();
         parent.return_object();
       }
     };
 
     template <> class ObjectWrapper<vector<vector<at::Tensor>>> {
     private:
-      ObjectPool<vector<vector<at::Tensor>>> &parent;
+      ObjectPool<vector<vector<at::Tensor>>> *parent;
 
     public:
-      vector<vector<at::Tensor>> &inner;
+      vector<vector<at::Tensor>> *inner;
+
+      explicit ObjectWrapper(vector<vector<at::Tensor>> &&vecs)
+          : parent(nullptr), inner(new vector(vecs)){};
 
       explicit ObjectWrapper(
           ObjectPool<vector<vector<at::Tensor>>> &parent_pool)
-          : parent(parent_pool), inner(parent_pool.get_object()) {}
+          : parent(&parent_pool), inner(parent_pool.get_object()) {}
 
-      operator vector<vector<at::Tensor>> &() const { return inner; }
+      operator vector<vector<at::Tensor>> &() const { return *inner; }
+      operator vector<at::Tensor> &() const { return inner->front(); }
 
       ~ObjectWrapper() {
-        inner[0].clear();
-        parent.return_object();
+        if (parent != nullptr) {
+          inner[0].clear();
+          parent->return_object();
+        } else
+          delete inner;
       }
     };
 
@@ -227,15 +234,13 @@ private:
     ObjectWrapper<T> get_object_wrapper() { return ObjectWrapper<T>(*this); }
   };
 
-  // IMPROVE:
+  typedef ObjectPool<vector<at::Tensor>> TensorVecPool;
+  // IMPROVE:clone_tensor_ptr
   // 每次调用集合通信相关的api就需要创建新的vector,造成频繁的堆内存申请,如何改善?
   // 用于clone Tensor指针
-  static ObjectPool<std::vector<at::Tensor>>::ObjectWrapper<
-      std::vector<at::Tensor>>
-  clone_tensor_prt(const tensor &tensor) {
-    thread_local ObjectPool<std::vector<at::Tensor>> tensor_vec_pool(
-        std::function<std::vector<at::Tensor>()>(
-            []() { return std::vector<at::Tensor>(); }));
+  static TensorVecPool::ObjectWrapper<> clone_tensor_ptr(const tensor &tensor) {
+    thread_local static TensorVecPool tensor_vec_pool(
+        []() { return std::vector<at::Tensor>(); });
 
     auto obj = tensor_vec_pool.get_object_wrapper();
 
@@ -243,31 +248,32 @@ private:
       return obj;
     }
 
-    obj.inner.emplace_back(*tensor);
+    obj.inner->emplace_back(*tensor);
 
     return obj;
   }
 
-  static ObjectPool<std::vector<std::vector<at::Tensor>>>::ObjectWrapper<
-      std::vector<std::vector<at::Tensor>>>
-  clone_tensor_prt(const Tensors &tensors) {
-    thread_local ObjectPool<std::vector<std::vector<at::Tensor>>>
-        tensor_vec_pool(std::function<std::vector<std::vector<at::Tensor>>()>(
-            []() { return std::vector<std::vector<at::Tensor>>(); }));
+  typedef ObjectPool<vector<vector<at::Tensor>>> TensorVecsPool;
+
+  static TensorVecsPool::ObjectWrapper<>
+  clone_tensor_ptr(const Tensors &tensors) {
+    thread_local static TensorVecsPool tensor_vec_pool(
+        []() { return std::vector<std::vector<at::Tensor>>(); });
 
     auto obj = tensor_vec_pool.get_object_wrapper();
     if (tensors.size == 0) {
-      throw "TODO: 此时应该返回空的vector,而不能继续复用包含单个元素的vecotr";
+      return TensorVecsPool::ObjectWrapper<>(vector<vector<at::Tensor>>());
     }
 
-    if (obj.inner.empty()) {
-      obj.inner.emplace_back();
+    if (obj.inner->empty()) {
+      obj.inner->emplace_back();
     }
 
     obj.inner[0].reserve(tensors.size);
     for (const auto &i : c10::irange(tensors.size)) {
-      obj.inner[0].emplace_back(at::Tensor(*(tensors.ptr[i])));
+      obj.inner[0].emplace_back(*(tensors.ptr[i]));
     }
+    printf("inner[0] size:%d\n", obj.inner[0].size());
 
     return obj;
   }
@@ -298,7 +304,7 @@ public:
         .rootRank = src_rank,
         .rootTensor = 0,
     };
-    auto tensors = clone_tensor_prt(tensor);
+    auto tensors = clone_tensor_ptr(tensor);
 
     return ArcWork(inner->broadcast(tensors, opts));
   }
@@ -307,7 +313,7 @@ public:
     auto all_reduce_opts = AllreduceOptions{
         .reduceOp = reduce_op,
     };
-    auto tensors = clone_tensor_prt(tensor);
+    auto tensors = clone_tensor_ptr(tensor);
 
     return ArcWork(inner->allreduce(tensors, all_reduce_opts));
   }
@@ -319,15 +325,15 @@ public:
         .rootRank = dst_rank,
     };
 
-    auto tensors = clone_tensor_prt(tensor);
+    auto tensors = clone_tensor_ptr(tensor);
 
     return ArcWork(inner->reduce(tensors, reduce_opts));
   }
 
   ArcWork all_gather_(tensor input_tensor, Tensors output_tensors) {
-    auto input_tensors = clone_tensor_prt(input_tensor);
+    auto input_tensors = clone_tensor_ptr(input_tensor);
 
-    auto output_tensors_vec = clone_tensor_prt(output_tensors);
+    auto output_tensors_vec = clone_tensor_ptr(output_tensors);
 
     return ArcWork(inner->allgather(output_tensors_vec, input_tensors));
     ;
@@ -339,9 +345,9 @@ public:
 
   ArcWork gather_(tensor input_tensor, Tensors output_tensors,
                   std::int64_t dst_rank) {
-    auto input_tensors = clone_tensor_prt(input_tensor);
+    auto input_tensors = clone_tensor_ptr(input_tensor);
 
-    auto output_tensors_vec = clone_tensor_prt(output_tensors);
+    auto output_tensors_vec = clone_tensor_ptr(output_tensors);
 
     GatherOptions opts = {.rootRank = dst_rank};
 
@@ -350,9 +356,9 @@ public:
 
   ArcWork scatter_(Tensors input_tensors, tensor output_tensor,
                    std::int64_t src_rank) {
-    auto input_tensors_vec = clone_tensor_prt(input_tensors);
+    auto input_tensors_vec = clone_tensor_ptr(input_tensors);
 
-    auto output_tensors = clone_tensor_prt(output_tensor);
+    auto output_tensors = clone_tensor_ptr(output_tensor);
 
     ScatterOptions opts = {.rootRank = src_rank};
 
@@ -361,9 +367,9 @@ public:
 
   ArcWork reduce_scatter_(Tensors input_tensors, tensor output_tensor,
                           ReduceOp::RedOpType reduce_op) {
-    auto input_tensors_vec = clone_tensor_prt(input_tensors);
+    auto input_tensors_vec = clone_tensor_ptr(input_tensors);
 
-    auto output_tensors = clone_tensor_prt(output_tensor);
+    auto output_tensors = clone_tensor_ptr(output_tensor);
 
     ReduceScatterOptions opts = {.reduceOp = reduce_op};
 
@@ -394,12 +400,20 @@ public:
   }
 
   ArcWork alltoall_(Tensors input_tensors, Tensors output_tensors) {
-    auto input_tensors_vec = clone_tensor_prt(input_tensors).inner;
+    printf("input_tensors_ptr size:%d\n", input_tensors.size);
+    printf("output_tensors_ptr size:%d\n", output_tensors.size);
 
-    auto output_tensors_vec = clone_tensor_prt(output_tensors).inner;
+    auto input_tensors_vec = clone_tensor_ptr(input_tensors);
 
-    return ArcWork(
-        inner->alltoall(output_tensors_vec.front(), input_tensors_vec.front()));
+    auto output_tensors_vec = clone_tensor_ptr(output_tensors);
+
+    printf("input_tensors_vec size: %d %d\n", input_tensors_vec.inner->size(),
+           input_tensors_vec.inner[0].size());
+
+    printf("output_tensors_vec size: %d %d\n", output_tensors_vec.inner->size(),
+           output_tensors_vec.inner[0].size());
+
+    return ArcWork(inner->alltoall(output_tensors_vec, output_tensors_vec));
   }
 
   ArcWork barrier_(const I64List device_ids) {
@@ -411,12 +425,12 @@ public:
   }
 
   ArcWork send_(tensor tensor, std::int64_t dst_rank) {
-    auto input_tensors = clone_tensor_prt(tensor);
+    auto input_tensors = clone_tensor_ptr(tensor);
     return ArcWork(inner->send(input_tensors, dst_rank, 0));
   }
 
   ArcWork receive_(tensor tensor, std::int64_t src_rank) {
-    auto output_tensors = clone_tensor_prt(tensor);
+    auto output_tensors = clone_tensor_ptr(tensor);
     return ArcWork(inner->recv(output_tensors, src_rank, 0));
   }
 };
