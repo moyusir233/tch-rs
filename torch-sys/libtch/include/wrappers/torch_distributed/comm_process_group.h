@@ -7,8 +7,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <exception>
-#include <functional>
 #include <iostream>
 #include <memory>
 
@@ -147,135 +145,27 @@ private:
       : _ArcProcessGroupNCCL(
             c10::intrusive_ptr<ProcessGroupNCCL>(process_group)) {}
 
-  // 用于重用vector
-  template <class T> class ObjectPool {
-  private:
-    std::vector<T> pool;
-    std::function<T()> create_object;
-    std::uint64_t cursor = 0;
-
-    T *get_object() {
-      // 扩容
-      if (cursor == pool.size()) {
-        pool.push_back(create_object());
-      }
-
-      T &obj = pool[cursor];
-      cursor += 1;
-      return &obj;
-    }
-
-    void return_object() { cursor -= 1; }
-
-  public:
-    template <class T2 = T> class ObjectWrapper {
-    private:
-      ObjectPool<T2> &parent;
-
-    public:
-      T2 &inner;
-
-      explicit ObjectWrapper(ObjectPool<T2> &parent_pool)
-          : parent(parent_pool), inner(parent_pool.get_object()) {}
-
-      operator T2 &() const { return inner; }
-
-      ~ObjectWrapper() { parent.return_object(); }
-    };
-
-    // 模板特化,处理vec元素的清理
-    template <> class ObjectWrapper<vector<at::Tensor>> {
-    private:
-      ObjectPool<vector<at::Tensor>> &parent;
-
-    public:
-      vector<at::Tensor> *inner;
-
-      explicit ObjectWrapper(ObjectPool<vector<at::Tensor>> &parent_pool)
-          : parent(parent_pool), inner(parent_pool.get_object()) {}
-
-      operator vector<at::Tensor> &() const { return *inner; }
-
-      ~ObjectWrapper() {
-        inner->clear();
-        parent.return_object();
-      }
-    };
-
-    template <> class ObjectWrapper<vector<vector<at::Tensor>>> {
-    private:
-      ObjectPool<vector<vector<at::Tensor>>> *parent;
-
-    public:
-      vector<vector<at::Tensor>> *inner;
-
-      explicit ObjectWrapper(vector<vector<at::Tensor>> &&vecs)
-          : parent(nullptr), inner(new vector(vecs)){};
-
-      explicit ObjectWrapper(
-          ObjectPool<vector<vector<at::Tensor>>> &parent_pool)
-          : parent(&parent_pool), inner(parent_pool.get_object()) {}
-
-      operator vector<vector<at::Tensor>> &() const { return *inner; }
-      operator vector<at::Tensor> &() const { return inner->front(); }
-
-      ~ObjectWrapper() {
-        if (parent != nullptr) {
-          inner[0].clear();
-          parent->return_object();
-        } else
-          delete inner;
-      }
-    };
-
-    explicit ObjectPool(std::function<T()> &&create_object_fn)
-        : create_object(create_object_fn) {}
-
-    ObjectWrapper<T> get_object_wrapper() { return ObjectWrapper<T>(*this); }
-  };
-
-  typedef ObjectPool<vector<at::Tensor>> TensorVecPool;
-  // IMPROVE:clone_tensor_ptr
-  // 每次调用集合通信相关的api就需要创建新的vector,造成频繁的堆内存申请,如何改善?
   // 用于clone Tensor指针
-  static TensorVecPool::ObjectWrapper<> clone_tensor_ptr(const tensor &tensor) {
-    thread_local static TensorVecPool tensor_vec_pool(
-        []() { return std::vector<at::Tensor>(); });
-
-    auto obj = tensor_vec_pool.get_object_wrapper();
-
+  static std::vector<at::Tensor> clone_tensor_ptr(const tensor &tensor) {
     if (tensor == nullptr) {
-      return obj;
+      return {};
     }
-
-    obj.inner->emplace_back(*tensor);
-
-    return obj;
+    return {at::Tensor(*tensor)};
   }
 
-  typedef ObjectPool<vector<vector<at::Tensor>>> TensorVecsPool;
-
-  static TensorVecsPool::ObjectWrapper<>
+  static std::vector<std::vector<at::Tensor>>
   clone_tensor_ptr(const Tensors &tensors) {
-    thread_local static TensorVecsPool tensor_vec_pool(
-        []() { return std::vector<std::vector<at::Tensor>>(); });
-
-    auto obj = tensor_vec_pool.get_object_wrapper();
     if (tensors.size == 0) {
-      return TensorVecsPool::ObjectWrapper<>(vector<vector<at::Tensor>>());
+      return {};
     }
 
-    if (obj.inner->empty()) {
-      obj.inner->emplace_back();
-    }
-
-    obj.inner[0].reserve(tensors.size);
+    vector<vector<at::Tensor>> tensors_vec = {
+        std::vector<at::Tensor>(tensors.size)};
     for (const auto &i : c10::irange(tensors.size)) {
-      obj.inner[0].emplace_back(*(tensors.ptr[i]));
+      tensors_vec[0][i] = at::Tensor(*(tensors.ptr[i]));
     }
-    printf("inner[0] size:%d\n", obj.inner[0].size());
 
-    return obj;
+    return std::move(tensors_vec);
   }
 
 public:
@@ -400,20 +290,11 @@ public:
   }
 
   ArcWork alltoall_(Tensors input_tensors, Tensors output_tensors) {
-    printf("input_tensors_ptr size:%d\n", input_tensors.size);
-    printf("output_tensors_ptr size:%d\n", output_tensors.size);
+    auto input_tensors_vec = clone_tensor_ptr(input_tensors)[0];
 
-    auto input_tensors_vec = clone_tensor_ptr(input_tensors);
+    auto output_tensors_vec = clone_tensor_ptr(output_tensors)[0];
 
-    auto output_tensors_vec = clone_tensor_ptr(output_tensors);
-
-    printf("input_tensors_vec size: %d %d\n", input_tensors_vec.inner->size(),
-           input_tensors_vec.inner[0].size());
-
-    printf("output_tensors_vec size: %d %d\n", output_tensors_vec.inner->size(),
-           output_tensors_vec.inner[0].size());
-
-    return ArcWork(inner->alltoall(output_tensors_vec, output_tensors_vec));
+    return ArcWork(inner->alltoall(output_tensors_vec, input_tensors_vec));
   }
 
   ArcWork barrier_(const I64List device_ids) {
@@ -434,6 +315,7 @@ public:
     return ArcWork(inner->recv(output_tensors, src_rank, 0));
   }
 };
+
 } // namespace c10d
 
 #endif // TCH_TORCH_PROCESS_GROUP_NCCL_H
