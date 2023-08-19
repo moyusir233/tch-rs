@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -167,38 +168,76 @@ private:
     void return_object() { cursor -= 1; }
 
   public:
-    class ObjectWrapper {
+    template <class T2 = T> class ObjectWrapper {
     private:
-      ObjectPool<T> &parent;
+      ObjectPool<T2> &parent;
 
     public:
-      T &inner;
+      T2 &inner;
 
-      explicit ObjectWrapper(ObjectPool<T> &parent_pool)
+      explicit ObjectWrapper(ObjectPool<T2> &parent_pool)
           : parent(parent_pool), inner(parent_pool.get_object()) {}
 
-      operator T &() const { return inner; }
+      operator T2 &() const { return inner; }
 
       ~ObjectWrapper() { parent.return_object(); }
+    };
+
+    // 模板特化,处理vec元素的清理
+    template <> class ObjectWrapper<vector<at::Tensor>> {
+    private:
+      ObjectPool<vector<at::Tensor>> &parent;
+
+    public:
+      vector<at::Tensor> &inner;
+
+      explicit ObjectWrapper(ObjectPool<vector<at::Tensor>> &parent_pool)
+          : parent(parent_pool), inner(parent_pool.get_object()) {}
+
+      operator vector<at::Tensor> &() const { return inner; }
+
+      ~ObjectWrapper() {
+        inner.clear();
+        parent.return_object();
+      }
+    };
+
+    template <> class ObjectWrapper<vector<vector<at::Tensor>>> {
+    private:
+      ObjectPool<vector<vector<at::Tensor>>> &parent;
+
+    public:
+      vector<vector<at::Tensor>> &inner;
+
+      explicit ObjectWrapper(
+          ObjectPool<vector<vector<at::Tensor>>> &parent_pool)
+          : parent(parent_pool), inner(parent_pool.get_object()) {}
+
+      operator vector<vector<at::Tensor>> &() const { return inner; }
+
+      ~ObjectWrapper() {
+        inner[0].clear();
+        parent.return_object();
+      }
     };
 
     explicit ObjectPool(std::function<T()> &&create_object_fn)
         : create_object(create_object_fn) {}
 
-    ObjectWrapper get_object_wrapper() { return ObjectWrapper(*this); }
+    ObjectWrapper<T> get_object_wrapper() { return ObjectWrapper<T>(*this); }
   };
 
   // IMPROVE:
   // 每次调用集合通信相关的api就需要创建新的vector,造成频繁的堆内存申请,如何改善?
   // 用于clone Tensor指针
-  static ObjectPool<std::vector<at::Tensor>>::ObjectWrapper
+  static ObjectPool<std::vector<at::Tensor>>::ObjectWrapper<
+      std::vector<at::Tensor>>
   clone_tensor_prt(const tensor &tensor) {
     thread_local ObjectPool<std::vector<at::Tensor>> tensor_vec_pool(
         std::function<std::vector<at::Tensor>()>(
             []() { return std::vector<at::Tensor>(); }));
 
     auto obj = tensor_vec_pool.get_object_wrapper();
-    obj.inner.clear();
 
     if (tensor == nullptr) {
       return obj;
@@ -209,17 +248,21 @@ private:
     return obj;
   }
 
-  static ObjectPool<std::vector<std::vector<at::Tensor>>>::ObjectWrapper
+  static ObjectPool<std::vector<std::vector<at::Tensor>>>::ObjectWrapper<
+      std::vector<std::vector<at::Tensor>>>
   clone_tensor_prt(const Tensors &tensors) {
     thread_local ObjectPool<std::vector<std::vector<at::Tensor>>>
         tensor_vec_pool(std::function<std::vector<std::vector<at::Tensor>>()>(
             []() { return std::vector<std::vector<at::Tensor>>(); }));
 
     auto obj = tensor_vec_pool.get_object_wrapper();
+    if (tensors.size == 0) {
+      throw "TODO: 此时应该返回空的vector,而不能继续复用包含单个元素的vecotr";
+    }
+
     if (obj.inner.empty()) {
       obj.inner.emplace_back();
     }
-    obj.inner[0].clear();
 
     obj.inner[0].reserve(tensors.size);
     for (const auto &i : c10::irange(tensors.size)) {
