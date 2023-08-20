@@ -294,11 +294,6 @@ public:
 
     auto output_tensors_vec = clone_tensor_ptr(output_tensors)[0];
 
-    for (const auto &i : c10::irange(input_tensors_vec.size())) {
-      input_tensors_vec[i].print();
-      output_tensors_vec[i].print();
-    }
-
     return ArcWork(inner->alltoall(output_tensors_vec, input_tensors_vec));
   }
 

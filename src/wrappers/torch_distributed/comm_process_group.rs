@@ -514,6 +514,7 @@ mod nccl_process_group {
 
     use super::*;
     use anyhow::Context;
+    use std::array::from_fn;
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -642,741 +643,657 @@ mod nccl_process_group {
         rank_states
     }
 
-    #[test]
-    fn init() {
-        create_process_group::<CUDA_DEVICE_COUNT>(
-            "init_test",
-            "127.0.0.1:7079",
-            std::array::from_fn(crate::Device::Cuda),
-        );
-    }
+    /// 需要独占单个线程来进行的通信测试
+    mod single_thread {
+        use super::*;
 
-    #[ignore] // 避免持有注册锁时panic,进而造成其他测试线程panic
-    #[should_panic]
-    #[test]
-    fn failed_init() {
-        create_process_group::<1>(
-            "init_test1",
-            "127.0.0.1:7078",
-            std::array::from_fn(crate::Device::Cuda),
-        );
-        create_process_group::<1>(
-            "init_test1",
-            "127.0.0.1:7078",
-            std::array::from_fn(crate::Device::Cuda),
-        );
-    }
-
-    #[test]
-    fn broadcast() {
-        struct BroadcastSender;
-        struct BroadcastReceiver {
-            src_rank: i64,
-        }
-
-        impl GroupOperator for BroadcastSender {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.broadcast_send(&rank_state.input_tensors[0])?;
-                Ok(rank_state)
-            }
-        }
-        impl GroupOperator for BroadcastReceiver {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                let src_rank = self.src_rank;
-
-                process_group.broadcast_receive(&mut rank_state.output_tensors[0], src_rank)?;
-                Ok(rank_state)
+        #[test]
+        fn single_thread_test_main() {
+            let exit_status = std::process::Command::new("cargo")
+                .args([
+                    "test",
+                    "-q",
+                    "nccl_process_group::single_thread",
+                    "--",
+                    "--ignored",
+                    "--test-threads=1",
+                ])
+                .env("CARGO_TEST_CUDA_DEVICE_COUNT", CUDA_DEVICE_COUNT.to_string())
+                .spawn()
+                .unwrap()
+                .wait()
+                .unwrap();
+            if !exit_status.success() {
+                panic!()
             }
         }
 
-        let broadcast_rank = 0;
-        let shape = [5, 5];
-        let kind = Kind::Float;
+        #[test]
+        #[ignore]
+        fn broadcast() {
+            struct BroadcastSender;
+            struct BroadcastReceiver {
+                src_rank: i64,
+            }
 
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                if rank == broadcast_rank {
-                    RankState::default().add_input(Tensor::rand(shape, (kind, Device::Cuda(rank))))
-                } else {
-                    RankState::default()
-                        .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
+            impl GroupOperator for BroadcastSender {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    process_group.broadcast_send(&rank_state.input_tensors[0])?;
+                    Ok(rank_state)
                 }
-            },
-            |rank| {
-                if rank == broadcast_rank {
-                    create_box_group_operator!(BroadcastSender)
-                } else {
-                    create_box_group_operator!(BroadcastReceiver {
-                        src_rank: broadcast_rank as i64
-                    })
-                }
-            },
-        );
-        let expected_tensor = rank_states[broadcast_rank].input_tensors[0].shallow_clone();
-
-        for (rank, output) in rank_states
-            .into_iter()
-            .enumerate()
-            .filter(|(rank, _state)| *rank != broadcast_rank)
-            .map(|(rank, mut state)| (rank, std::mem::take(&mut state.output_tensors[0])))
-        {
-            if rank == broadcast_rank {
-                continue;
             }
-            assert!(
+            impl GroupOperator for BroadcastReceiver {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    mut rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    let src_rank = self.src_rank;
+
+                    process_group.broadcast_receive(&mut rank_state.output_tensors[0], src_rank)?;
+                    Ok(rank_state)
+                }
+            }
+
+            let broadcast_rank = 0;
+            let shape = [5, 5];
+            let kind = Kind::Float;
+
+            let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
+                |rank| {
+                    if rank == broadcast_rank {
+                        RankState::default()
+                            .add_input(Tensor::rand(shape, (kind, Device::Cuda(rank))))
+                    } else {
+                        RankState::default()
+                            .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
+                    }
+                },
+                |rank| {
+                    if rank == broadcast_rank {
+                        create_box_group_operator!(BroadcastSender)
+                    } else {
+                        create_box_group_operator!(BroadcastReceiver {
+                            src_rank: broadcast_rank as i64
+                        })
+                    }
+                },
+            );
+            let expected_tensor = rank_states[broadcast_rank].input_tensors[0].shallow_clone();
+
+            for (rank, output) in rank_states
+                .into_iter()
+                .enumerate()
+                .filter(|(rank, _state)| *rank != broadcast_rank)
+                .map(|(rank, mut state)| (rank, std::mem::take(&mut state.output_tensors[0])))
+            {
+                if rank == broadcast_rank {
+                    continue;
+                }
+                assert!(
                 output.equal(&expected_tensor.to_device(Device::Cuda(rank))),
                 "The rank: {rank}'s result: {output} is different with expected:{expected_tensor}!",
             )
+            }
         }
-    }
 
-    #[test]
-    fn all_reduce() {
-        struct AllReduceRank {
-            reduce_count: usize,
-        }
-        impl GroupOperator for AllReduceRank {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                for _ in 0..self.reduce_count {
-                    process_group.all_reduce(&mut rank_state.input_tensors[0], ReduceOp::SUM)?;
+        #[ignore]
+        #[test]
+        fn all_reduce() {
+            struct AllReduceRank {
+                reduce_count: usize,
+            }
+            impl GroupOperator for AllReduceRank {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    mut rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    for _ in 0..self.reduce_count {
+                        process_group
+                            .all_reduce(&mut rank_state.input_tensors[0], ReduceOp::SUM)?;
+                    }
+                    Ok(rank_state)
                 }
-                Ok(rank_state)
             }
-        }
 
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let reduce_count = 5;
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| RankState::default().add_input(Tensor::ones(shape, (kind, Device::Cuda(rank)))),
-            |_rank| create_box_group_operator!(AllReduceRank { reduce_count }),
-        );
-
-        let expected_tensor = Tensor::ones(shape, (kind, Device::Cuda(0)))
-            * (CUDA_DEVICE_COUNT.pow(reduce_count as u32)) as i64;
-        for (rank, output) in rank_states
-            .into_iter()
-            .map(|mut state| std::mem::take(&mut state.input_tensors[0]))
-            .enumerate()
-        {
-            assert!(output.equal(&expected_tensor.to_device(Device::Cuda(rank))));
-        }
-    }
-
-    #[test]
-    fn reduce() {
-        struct ReduceSender {
-            dst_rank: i64,
-        }
-        struct ReduceReceiver;
-
-        impl GroupOperator for ReduceSender {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                rank_state: RankState,
-            ) -> TchResult<RankState> {
-                let dst_rank = self.dst_rank;
-
-                process_group.reduce_send(&rank_state.input_tensors[0], dst_rank, ReduceOp::SUM)?;
-                Ok(rank_state)
-            }
-        }
-        impl GroupOperator for ReduceReceiver {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.reduce_receive(&mut rank_state.output_tensors[0], ReduceOp::SUM)?;
-                Ok(rank_state)
-            }
-        }
-
-        let dst_rank = 0;
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                if rank == dst_rank {
-                    RankState::default()
-                        .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
-                } else {
+            let shape = [5, 5];
+            let kind = Kind::Float;
+            let reduce_count = 5;
+            let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
+                |rank| {
                     RankState::default().add_input(Tensor::ones(shape, (kind, Device::Cuda(rank))))
-                }
-            },
-            |rank| {
-                if rank == dst_rank {
-                    create_box_group_operator!(ReduceReceiver)
-                } else {
-                    create_box_group_operator!(ReduceSender { dst_rank: dst_rank as i64 })
-                }
-            },
-        );
+                },
+                |_rank| create_box_group_operator!(AllReduceRank { reduce_count }),
+            );
 
-        let expected_tensor =
-            Tensor::ones(shape, (kind, Device::Cuda(0))) * (CUDA_DEVICE_COUNT - 1) as i64;
-        let reduced_tensor = &rank_states[dst_rank].output_tensors[0];
-        assert!(
-            rank_states[dst_rank].output_tensors[0]
-                .equal(&expected_tensor.to_device(Device::Cuda(dst_rank))),
-            "Reduced tensor: {reduced_tensor} is different with expected: {expected_tensor}!"
-        );
-    }
+            let expected_tensor = Tensor::ones(shape, (kind, Device::Cuda(0)))
+                * (CUDA_DEVICE_COUNT.pow(reduce_count as u32)) as i64;
+            for (rank, output) in rank_states
+                .into_iter()
+                .map(|mut state| std::mem::take(&mut state.input_tensors[0]))
+                .enumerate()
+            {
+                assert!(output.equal(&expected_tensor.to_device(Device::Cuda(rank))));
+            }
+        }
 
-    #[test]
-    fn all_gather() {
-        struct AllGatherRank;
-        impl GroupOperator for AllGatherRank {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                {
-                    process_group.all_gather(
+        #[ignore]
+        #[test]
+        fn reduce() {
+            struct ReduceSender {
+                dst_rank: i64,
+            }
+            struct ReduceReceiver;
+
+            impl GroupOperator for ReduceSender {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    let dst_rank = self.dst_rank;
+
+                    process_group.reduce_send(
                         &rank_state.input_tensors[0],
-                        rank_state.output_tensors.as_mut_slice(),
+                        dst_rank,
+                        ReduceOp::SUM,
                     )?;
                     Ok(rank_state)
                 }
             }
+            impl GroupOperator for ReduceReceiver {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    mut rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    process_group
+                        .reduce_receive(&mut rank_state.output_tensors[0], ReduceOp::SUM)?;
+                    Ok(rank_state)
+                }
+            }
+
+            let dst_rank = 0;
+            let shape = [5, 5];
+            let kind = Kind::Float;
+            let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
+                |rank| {
+                    if rank == dst_rank {
+                        RankState::default()
+                            .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
+                    } else {
+                        RankState::default()
+                            .add_input(Tensor::ones(shape, (kind, Device::Cuda(rank))))
+                    }
+                },
+                |rank| {
+                    if rank == dst_rank {
+                        create_box_group_operator!(ReduceReceiver)
+                    } else {
+                        create_box_group_operator!(ReduceSender { dst_rank: dst_rank as i64 })
+                    }
+                },
+            );
+
+            let expected_tensor =
+                Tensor::ones(shape, (kind, Device::Cuda(0))) * (CUDA_DEVICE_COUNT - 1) as i64;
+            let reduced_tensor = &rank_states[dst_rank].output_tensors[0];
+            assert!(
+                rank_states[dst_rank].output_tensors[0]
+                    .equal(&expected_tensor.to_device(Device::Cuda(dst_rank))),
+                "Reduced tensor: {reduced_tensor} is different with expected: {expected_tensor}!"
+            );
         }
 
-        let shape = [5, 5];
-        let kind = Kind::Float;
+        #[ignore]
+        #[test]
+        fn all_gather() {
+            struct AllGatherRank;
+            impl GroupOperator for AllGatherRank {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    mut rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    {
+                        process_group.all_gather(
+                            &rank_state.input_tensors[0],
+                            rank_state.output_tensors.as_mut_slice(),
+                        )?;
+                        Ok(rank_state)
+                    }
+                }
+            }
 
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                RankState::default()
-                    .add_input(Tensor::ones(shape, (kind, Device::Cuda(rank))))
-                    .add_outputs::<CUDA_DEVICE_COUNT>(|| {
-                    Tensor::zeros(shape, (kind, Device::Cuda(rank)))
-                })
-            },
-            |_rank| create_box_group_operator!(AllGatherRank),
-        );
+            let shape = [5, 5];
+            let kind = Kind::Float;
 
-        let expected_tensors = Vec::from_iter(
-            std::iter::repeat_with(|| Tensor::ones(shape, (kind, Device::Cuda(0))))
-                .take(CUDA_DEVICE_COUNT),
-        );
+            let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
+                |rank| {
+                    RankState::default()
+                        .add_input(
+                            Tensor::ones(shape, (kind, Device::Cuda(rank))) * (rank + 1) as i64,
+                        )
+                        .add_outputs::<CUDA_DEVICE_COUNT>(|| {
+                            Tensor::zeros(shape, (kind, Device::Cuda(rank)))
+                        })
+                },
+                |_rank| create_box_group_operator!(AllGatherRank),
+            );
 
-        for (rank, output_tensors) in
-            rank_states.into_iter().map(|state| state.output_tensors).enumerate()
-        {
-            assert!(output_tensors.iter().zip(expected_tensors.iter()).all(
+            let expected_tensors: [_; CUDA_DEVICE_COUNT] =
+                from_fn(|rank| Tensor::ones(shape, (kind, Device::Cuda(rank))) * (rank + 1) as i64);
+
+            for (rank, output_tensors) in
+                rank_states.into_iter().map(|state| state.output_tensors).enumerate()
+            {
+                assert!(output_tensors.iter().zip(expected_tensors.iter()).all(
                 |(output_tensor, expected_tensor)| {
                     output_tensor.equal(&expected_tensor.to_device(Device::Cuda(rank)))
                 },
             ),
             "Output tensors: {output_tensors:?} is different with expected tensors: {expected_tensors:?}"
         )
+            }
         }
-    }
 
-    #[test]
-    fn all_gather_into_tensor() {
-        struct AllGatherRank;
-        impl GroupOperator for AllGatherRank {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                {
-                    process_group.all_gather_into_tensor(
-                        &rank_state.input_tensors[0],
+        #[ignore]
+        #[test]
+        fn all_gather_into_tensor() {
+            struct AllGatherRank;
+            impl GroupOperator for AllGatherRank {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    mut rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    {
+                        process_group.all_gather_into_tensor(
+                            &rank_state.input_tensors[0],
+                            &mut rank_state.output_tensors[0],
+                        )?;
+                        Ok(rank_state)
+                    }
+                }
+            }
+
+            let shape = [5, 5];
+            let kind = Kind::Float;
+
+            let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
+                |rank| {
+                    RankState::default()
+                        .add_input(
+                            Tensor::ones(shape, (kind, Device::Cuda(rank))) * (rank + 1) as i64,
+                        )
+                        .add_output(Tensor::zeros(
+                            [shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]],
+                            (kind, Device::Cuda(rank)),
+                        ))
+                },
+                |_rank| create_box_group_operator!(AllGatherRank),
+            );
+
+            let expected_tensor = Tensor::zeros(
+                [shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]],
+                (kind, Device::Cuda(0)),
+            );
+            for i in 0..CUDA_DEVICE_COUNT {
+                use crate::IndexOp;
+                let i = i as i64;
+                let _ = expected_tensor.i((i * shape[0])..((i + 1) * shape[0])).fill_(i + 1);
+            }
+
+            for (rank, output_tensor) in rank_states
+                .into_iter()
+                .map(|mut state| std::mem::take(&mut state.output_tensors[0]))
+                .enumerate()
+            {
+                assert!(output_tensor.equal(&expected_tensor.to_device(Device::Cuda(rank))),         "Output tensor: {output_tensor:?} is different with expected tensors: {expected_tensor:?}"
+        )
+            }
+        }
+
+        #[ignore]
+        #[test]
+        fn reduce_scatter() {
+            struct ReduceScatterRank;
+            impl GroupOperator for ReduceScatterRank {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    mut rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    process_group.reduce_scatter(
+                        rank_state.input_tensors.as_slice(),
                         &mut rank_state.output_tensors[0],
+                        ReduceOp::SUM,
                     )?;
                     Ok(rank_state)
                 }
             }
-        }
 
-        let shape = [5, 5];
-        let kind = Kind::Float;
-
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                RankState::default()
-                    .add_input(Tensor::ones(shape, (kind, Device::Cuda(rank))))
-                    .add_output(Tensor::zeros(
-                        [shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]],
-                        (kind, Device::Cuda(rank)),
-                    ))
-            },
-            |_rank| create_box_group_operator!(AllGatherRank),
-        );
-
-        let expected_tensor =
-            Tensor::ones([shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]], (kind, Device::Cuda(0)));
-        for (rank, output_tensor) in rank_states
-            .into_iter()
-            .map(|mut state| std::mem::take(&mut state.output_tensors[0]))
-            .enumerate()
-        {
-            assert!(output_tensor.equal(&expected_tensor.to_device(Device::Cuda(rank))),         "Output tensor: {output_tensor:?} is different with expected tensors: {expected_tensor:?}"
-        )
-        }
-    }
-
-    // TODO: 需要改为多进程的测试
-    #[test]
-    #[ignore]
-    fn gather() {
-        struct GatherSender {
-            dst_rank: i64,
-        }
-        struct GatherReceiver;
-
-        impl GroupOperator for GatherSender {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.gather_send(&rank_state.input_tensors[0], self.dst_rank)?;
-                Ok(rank_state)
-            }
-        }
-        impl GroupOperator for GatherReceiver {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.gather_receive(
-                    &rank_state.input_tensors[0],
-                    rank_state.output_tensors.as_mut_slice(),
-                )?;
-                Ok(rank_state)
-            }
-        }
-
-        let dst_rank = 0;
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let mut rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                if rank == dst_rank {
+            let shape = [5, 5];
+            let kind = Kind::Float;
+            let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
+                |rank| {
                     RankState::default()
-                        .add_input(Tensor::ones(shape, (kind, Device::Cuda(rank))))
-                        .add_outputs::<CUDA_DEVICE_COUNT>(|| {
-                        Tensor::zeros(shape, (kind, Device::Cuda(rank)))
-                    })
-                } else {
-                    RankState::default().add_input(Tensor::ones(shape, (kind, Device::Cuda(rank))))
-                }
-            },
-            |rank| {
-                if rank == dst_rank {
-                    create_box_group_operator!(GatherReceiver)
-                } else {
-                    create_box_group_operator!(GatherSender { dst_rank: dst_rank as i64 })
-                }
-            },
-        );
-
-        let expected_tensors = Vec::from_iter(
-            std::iter::repeat_with(|| Tensor::ones(shape, (kind, Device::Cuda(0))))
-                .take(CUDA_DEVICE_COUNT),
-        );
-
-        let output_tensors = std::mem::take(&mut rank_states[dst_rank].output_tensors);
-        assert!(output_tensors.iter().zip(expected_tensors.iter()).all(
-                |(output_tensor, expected_tensor)| {
-                    output_tensor.equal(&expected_tensor.to_device(Device::Cuda(dst_rank)))
-                },
-            ),
-            "Output tensors: {output_tensors:?} is different with expected tensors: {expected_tensors:?}"
-        )
-    }
-    // TODO: 需要改为多进程的测试
-    #[test]
-    #[ignore]
-    fn scatter() {
-        struct ScatterSender;
-        struct ScatterReceiver {
-            src_rank: i64,
-        }
-
-        impl GroupOperator for ScatterSender {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.scatter_send(
-                    rank_state.input_tensors.as_slice(),
-                    &mut rank_state.output_tensors[0],
-                )?;
-                Ok(rank_state)
-            }
-        }
-        impl GroupOperator for ScatterReceiver {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.scatter_receive(&mut rank_state.output_tensors[0], self.src_rank)?;
-                Ok(rank_state)
-            }
-        }
-
-        let src_rank = 0;
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                if rank == src_rank {
-                    RankState::default()
-                        .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
                         .add_inputs::<CUDA_DEVICE_COUNT>(|| {
                             Tensor::ones(shape, (kind, Device::Cuda(rank)))
                         })
-                } else {
-                    RankState::default()
                         .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
-                }
-            },
-            |rank| {
-                if rank == src_rank {
-                    create_box_group_operator!(ScatterSender)
-                } else {
-                    create_box_group_operator!(ScatterReceiver { src_rank: src_rank as i64 })
-                }
-            },
-        );
-
-        let expected_tensor = Tensor::ones(shape, (kind, Device::Cuda(0)));
-        for (rank, output_tensor) in rank_states
-            .into_iter()
-            .map(|mut state| std::mem::take(&mut state.output_tensors[0]))
-            .enumerate()
-        {
-            assert!(output_tensor.equal(&expected_tensor.to_device(Device::Cuda(rank))),
-                "Output tensors: {output_tensor:?} is different with expected tensors: {expected_tensor:?}"
-            )
-        }
-    }
-
-    #[test]
-    fn reduce_scatter() {
-        struct ReduceScatterRank;
-        impl GroupOperator for ReduceScatterRank {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.reduce_scatter(
-                    rank_state.input_tensors.as_slice(),
-                    &mut rank_state.output_tensors[0],
-                    ReduceOp::SUM,
-                )?;
-                Ok(rank_state)
-            }
-        }
-
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                RankState::default()
-                    .add_inputs::<CUDA_DEVICE_COUNT>(|| {
-                        Tensor::ones(shape, (kind, Device::Cuda(rank)))
-                    })
-                    .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
-            },
-            |_rank| create_box_group_operator!(ReduceScatterRank),
-        );
-
-        let expected_tensor = Tensor::ones(shape, (kind, Device::Cuda(0)));
-        for (rank, output) in rank_states
-            .into_iter()
-            .map(|mut state| std::mem::take(&mut state.input_tensors[0]))
-            .enumerate()
-        {
-            assert!(output.equal(&expected_tensor.to_device(Device::Cuda(rank))));
-        }
-    }
-
-    #[test]
-    fn reduce_scatter_into_tensor() {
-        struct ReduceScatterRank;
-        impl GroupOperator for ReduceScatterRank {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.reduce_scatter_into_tensor(
-                    &rank_state.input_tensors[0],
-                    &mut rank_state.output_tensors[0],
-                    ReduceOp::SUM,
-                )?;
-                Ok(rank_state)
-            }
-        }
-
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                RankState::default()
-                    .add_input(Tensor::ones(
-                        [shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]],
-                        (kind, Device::Cuda(rank)),
-                    ))
-                    .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
-            },
-            |_rank| create_box_group_operator!(ReduceScatterRank),
-        );
-
-        let expected_tensor =
-            Tensor::ones(shape, (kind, Device::Cuda(0))) * CUDA_DEVICE_COUNT as i64;
-        for (rank, output) in rank_states
-            .into_iter()
-            .map(|mut state| std::mem::take(&mut state.output_tensors[0]))
-            .enumerate()
-        {
-            assert!(
-                output.equal(&expected_tensor.to_device(Device::Cuda(rank))),
-                "output tensor: {output} is different with expected_tensor: {expected_tensor}"
-            );
-        }
-    }
-
-    // TODO: 需要改为多进程的测试
-    #[test]
-    #[ignore]
-    fn all_to_all_single() {
-        struct AllToAllRank {
-            input_split_sizes: [i64; CUDA_DEVICE_COUNT],
-            output_split_sizes: [i64; CUDA_DEVICE_COUNT],
-        }
-        impl GroupOperator for AllToAllRank {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.all_to_all_single(
-                    &rank_state.input_tensors[0],
-                    &mut rank_state.output_tensors[0],
-                    self.input_split_sizes.as_slice(),
-                    self.output_split_sizes.as_slice(),
-                )?;
-                Ok(rank_state)
-            }
-        }
-
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                RankState::default()
-                    .add_input(Tensor::ones(
-                        [shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]],
-                        (kind, Device::Cuda(rank)),
-                    ))
-                    .add_output(Tensor::zeros(
-                        [shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]],
-                        (kind, Device::Cuda(rank)),
-                    ))
-            },
-            |_rank| {
-                create_box_group_operator!(AllToAllRank {
-                    input_split_sizes: std::array::from_fn(|_| shape[0]),
-                    output_split_sizes: std::array::from_fn(|_| shape[0]),
-                })
-            },
-        );
-
-        let expected_tensor =
-            Tensor::ones([shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]], (kind, Device::Cuda(0)));
-        for (rank, output) in rank_states
-            .into_iter()
-            .map(|mut state| std::mem::take(&mut state.output_tensors[0]))
-            .enumerate()
-        {
-            assert!(output.equal(&expected_tensor.to_device(Device::Cuda(rank))));
-        }
-    }
-
-    // TODO: 需要改为多进程的测试
-    #[test]
-    #[ignore]
-    fn all_to_all_list() {
-        struct AllToAllRank;
-        impl GroupOperator for AllToAllRank {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.all_to_all(
-                    rank_state.input_tensors.as_slice(),
-                    rank_state.output_tensors.as_mut_slice(),
-                )?;
-                Ok(rank_state)
-            }
-        }
-
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
-            |rank| {
-                RankState::default()
-                    .add_inputs::<CUDA_DEVICE_COUNT>(|| {
-                        Tensor::ones(shape, (kind, Device::Cuda(rank)))
-                    })
-                    .add_outputs::<CUDA_DEVICE_COUNT>(|| {
-                        Tensor::zeros(shape, (kind, Device::Cuda(rank)))
-                    })
-            },
-            |_rank| create_box_group_operator!(AllToAllRank),
-        );
-
-        let expected_tensors = Vec::from_iter(
-            std::iter::repeat_with(|| Tensor::ones(shape, (kind, Device::Cuda(0))))
-                .take(CUDA_DEVICE_COUNT),
-        );
-        for (rank, output_tensors) in
-            rank_states.into_iter().map(|state| state.output_tensors).enumerate()
-        {
-            assert!(output_tensors.iter().zip(expected_tensors.iter()).all(
-                |(output_tensor, expected_tensor)| {
-                    output_tensor.equal(&expected_tensor.to_device(Device::Cuda(rank)))
                 },
-            ),
-            "Output tensors: {output_tensors:?} is different with expected tensors: {expected_tensors:?}"
-            )
-        }
-    }
+                |_rank| create_box_group_operator!(ReduceScatterRank),
+            );
 
-    // TODO: 需要改为多进程的测试
-    #[ignore]
-    #[test]
-    fn p2p() {
-        assert!(CUDA_DEVICE_COUNT >= 2);
-
-        struct Sender {
-            dst_rank: i64,
-        }
-        struct Receiver {
-            src_rank: i64,
-        }
-
-        impl GroupOperator for Sender {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.send(&rank_state.input_tensors[0], self.dst_rank)?;
-                Ok(rank_state)
-            }
-        }
-        impl GroupOperator for Receiver {
-            fn handle(
-                &mut self,
-                mut process_group: ProcessGroupNCCL,
-                mut rank_state: RankState,
-            ) -> TchResult<RankState> {
-                process_group.receive(&mut rank_state.output_tensors[0], self.src_rank)?;
-                Ok(rank_state)
+            let expected_tensor = Tensor::ones(shape, (kind, Device::Cuda(0)));
+            for (rank, output) in rank_states
+                .into_iter()
+                .map(|mut state| std::mem::take(&mut state.input_tensors[0]))
+                .enumerate()
+            {
+                assert!(output.equal(&expected_tensor.to_device(Device::Cuda(rank))));
             }
         }
 
-        let src_rank: i64 = 0;
-        let dst_rank: i64 = 1;
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let rank_states = collective_comm_test::<_, _, 2>(
-            |rank| {
-                if rank == src_rank as usize {
-                    RankState::default().add_input(Tensor::ones(shape, (kind, Device::Cuda(rank))))
-                } else {
+        #[test]
+        #[ignore]
+        fn reduce_scatter_into_tensor() {
+            struct ReduceScatterRank;
+            impl GroupOperator for ReduceScatterRank {
+                fn handle(
+                    &mut self,
+                    mut process_group: ProcessGroupNCCL,
+                    mut rank_state: RankState,
+                ) -> TchResult<RankState> {
+                    process_group.reduce_scatter_into_tensor(
+                        &rank_state.input_tensors[0],
+                        &mut rank_state.output_tensors[0],
+                        ReduceOp::SUM,
+                    )?;
+                    Ok(rank_state)
+                }
+            }
+
+            let shape = [5, 5];
+            let kind = Kind::Float;
+            let rank_states = collective_comm_test::<_, _, CUDA_DEVICE_COUNT>(
+                |rank| {
                     RankState::default()
+                        .add_input(Tensor::ones(
+                            [shape[0] * CUDA_DEVICE_COUNT as i64, shape[1]],
+                            (kind, Device::Cuda(rank)),
+                        ))
                         .add_output(Tensor::zeros(shape, (kind, Device::Cuda(rank))))
-                }
-            },
-            |rank| {
-                if rank == src_rank as usize {
-                    create_box_group_operator!(Sender { dst_rank })
-                } else {
-                    create_box_group_operator!(Receiver { src_rank })
-                }
-            },
-        );
+                },
+                |_rank| create_box_group_operator!(ReduceScatterRank),
+            );
 
-        let expected_tensor = Tensor::ones(shape, (kind, Device::Cuda(dst_rank as usize)));
-        let output_tensor = &rank_states[dst_rank as usize].output_tensors[0];
-
-        assert!(output_tensor.equal(&expected_tensor),
-                "Output tensors: {output_tensor:?} is different with expected tensors: {expected_tensor:?}"
-            )
+            let expected_tensor =
+                Tensor::ones(shape, (kind, Device::Cuda(0))) * CUDA_DEVICE_COUNT as i64;
+            for (rank, output) in rank_states
+                .into_iter()
+                .map(|mut state| std::mem::take(&mut state.output_tensors[0]))
+                .enumerate()
+            {
+                assert!(
+                    output.equal(&expected_tensor.to_device(Device::Cuda(rank))),
+                    "output tensor: {output} is different with expected_tensor: {expected_tensor}"
+                );
+            }
+        }
     }
 
-    #[test]
-    fn process_rank0() {
-        let device = crate::Device::Cuda(0);
-        let mut process_group = ProcessGroupNCCL::new(
-            "process_rank_test",
-            "127.0.0.1:80".parse().unwrap(),
-            None,
-            2,
-            0,
-            crate::Device::Cuda(0),
-            None,
-        );
+    /// 需要独占单个进程来进程的通信测试
+    mod multi_prcess {
+        use super::*;
 
-        process_group.barrier().unwrap();
-        println!("process_group sync complete");
+        /// 利用多进程完成nccl通信组的测试
+        #[test]
+        fn multi_process_test_main() {
+            let mut processes: SmallVec<[_; CUDA_DEVICE_COUNT]> = SmallVec::new();
 
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let input_tensor = Tensor::ones(shape, (kind, device));
+            // 启动root rank的测试进程
+            processes.push(
+                std::process::Command::new("cargo")
+                    .args([
+                        "test",
+                        "-q",
+                        "nccl_process_group::multi_prcess::process_rank_root",
+                        "--",
+                        "--ignored",
+                    ])
+                    .env("CARGO_TEST_WORLD_SIZE", CUDA_DEVICE_COUNT.to_string())
+                    .spawn()
+                    .unwrap(),
+            );
 
-        process_group.send(&input_tensor, 1).unwrap();
-    }
+            // 启动其他child rank的测试进程
+            for rank in 1..CUDA_DEVICE_COUNT {
+                processes.push(
+                    std::process::Command::new("cargo")
+                        .args([
+                            "test",
+                            "-q",
+                            "nccl_process_group::multi_prcess::process_rank_child",
+                            "--",
+                            "--ignored",
+                        ])
+                        .env("CARGO_TEST_CHILD_PROCESS_RANK", rank.to_string())
+                        .env("CARGO_TEST_WORLD_SIZE", CUDA_DEVICE_COUNT.to_string())
+                        .spawn()
+                        .unwrap(),
+                );
+            }
 
-    #[test]
-    fn process_rank1() {
-        let device = crate::Device::Cuda(1);
-        let mut process_group = ProcessGroupNCCL::new(
-            "process_rank_test",
-            "127.0.0.1:80".parse().unwrap(),
-            None,
-            2,
-            1,
-            crate::Device::Cuda(1),
-            None,
-        );
+            // 等待进程结束,如果中间出现了错误,则停止全部进程
+            for i in 0..processes.len() {
+                let exit_status = processes[i].wait().unwrap();
+                if !exit_status.success() {
+                    for j in i + 1..processes.len() {
+                        processes[j].kill().unwrap();
+                    }
+                    panic!()
+                }
+            }
+        }
 
-        process_group.barrier().unwrap();
-        println!("process_group sync complete");
+        #[test]
+        #[ignore]
+        fn process_rank_root() {
+            const _WORLD_SIZE_STR: &str =
+                konst::option::unwrap_or!(option_env!("CARGO_TEST_WORLD_SIZE"), "1");
 
-        let shape = [5, 5];
-        let kind = Kind::Float;
-        let mut output_tensor = Tensor::zeros(shape, (kind, device));
+            const WORLD_SIZE: usize =
+                konst::unwrap_ctx!(konst::primitive::parse_usize(_WORLD_SIZE_STR));
 
-        process_group.receive(&mut output_tensor, 0).unwrap();
-        assert!(output_tensor.equal(&output_tensor.ones_like()))
+            let rank = 0;
+            let device = crate::Device::Cuda(rank);
+            let mut process_group = ProcessGroupNCCL::new(
+                "process_rank_test",
+                "127.0.0.1:80".parse().unwrap(),
+                None,
+                2,
+                rank as i64,
+                device,
+                None,
+            );
+
+            process_group.barrier().unwrap();
+            println!("process_group{rank} sync complete");
+
+            let shape = [5, 5];
+            let kind = Kind::Float;
+
+            // p2p test
+            {
+                let input_tensor = Tensor::ones(shape, (kind, device));
+
+                process_group.send(&input_tensor, 1).unwrap();
+            }
+
+            // all_to_all_list
+            {
+                let input_tensors: [_; WORLD_SIZE] =
+                    from_fn(|_| Tensor::ones(shape, (kind, device)) * (rank + 1) as i64);
+                let mut output_tensors: [_; WORLD_SIZE] =
+                    from_fn(|_| Tensor::zeros(shape, (kind, device)));
+
+                process_group
+                    .all_to_all(input_tensors.as_slice(), output_tensors.as_mut_slice())
+                    .unwrap();
+
+                output_tensors.into_iter().enumerate().for_each(|(i, output_tensor)| {
+                    assert!(output_tensor.equal(&(output_tensor.ones_like() * (i + 1) as i64)));
+                });
+            }
+
+            // all_to_all_single
+            {
+                let input_tensor =
+                    Tensor::ones([shape[0] * WORLD_SIZE as i64, shape[1]], (kind, device))
+                        * (rank + 1) as i64;
+                let mut output_tensor =
+                    Tensor::zeros([shape[0] * WORLD_SIZE as i64, shape[1]], (kind, device));
+
+                process_group
+                    .all_to_all_single(
+                        &input_tensor,
+                        &mut output_tensor,
+                        from_fn::<_, WORLD_SIZE, _>(|_| shape[0]),
+                        from_fn::<_, WORLD_SIZE, _>(|_| shape[0]),
+                    )
+                    .unwrap();
+
+                output_tensor.chunk(WORLD_SIZE as i64, 0).into_iter().enumerate().for_each(
+                    |(i, output_tensor)| {
+                        assert!(
+                            output_tensor.equal(&(output_tensor.ones_like() * (i + 1) as i64)),
+                            "output_tensor:{output_tensor}"
+                        );
+                    },
+                )
+            }
+
+            // gather
+            {
+                let input_tensor = Tensor::ones(shape, (kind, device)) * (rank + 1) as i64;
+                let mut output_tensors: [_; WORLD_SIZE] =
+                    from_fn(|_| Tensor::zeros(shape, (kind, device)));
+
+                process_group.gather_receive(&input_tensor, output_tensors.as_mut_slice()).unwrap();
+
+                output_tensors.into_iter().enumerate().for_each(|(i, output_tensor)| {
+                    assert!(output_tensor.equal(&(output_tensor.ones_like() * (i + 1) as i64)));
+                });
+            }
+
+            // scatter
+            {
+                let input_tensors: [_; WORLD_SIZE] =
+                    from_fn(|rank| Tensor::ones(shape, (kind, device)) * (rank + 1) as i64);
+                let mut output_tensor = Tensor::zeros(shape, (kind, device));
+
+                process_group.scatter_send(input_tensors.as_slice(), &mut output_tensor).unwrap();
+
+                assert_eq!(output_tensor, Tensor::ones(shape, (kind, device)) * (rank + 1) as i64);
+            }
+        }
+
+        #[test]
+        #[ignore]
+        fn process_rank_child() {
+            const _WORLD_SIZE_STR: &str =
+                konst::option::unwrap_or!(option_env!("CARGO_TEST_WORLD_SIZE"), "1");
+            const WORLD_SIZE: usize =
+                konst::unwrap_ctx!(konst::primitive::parse_usize(_WORLD_SIZE_STR));
+
+            let rank = std::env::var("CARGO_TEST_CHILD_PROCESS_RANK").unwrap().parse().unwrap();
+
+            let device = crate::Device::Cuda(rank);
+            let mut process_group = ProcessGroupNCCL::new(
+                "process_rank_test",
+                "127.0.0.1:80".parse().unwrap(),
+                None,
+                2,
+                rank as i64,
+                device,
+                None,
+            );
+
+            process_group.barrier().unwrap();
+            println!("process_group{rank} sync complete");
+
+            let shape = [5, 5];
+            let kind = Kind::Float;
+
+            // p2p test
+            {
+                let mut output_tensor = Tensor::zeros(shape, (kind, device));
+                process_group.receive(&mut output_tensor, 0).unwrap();
+                assert!(output_tensor.equal(&output_tensor.ones_like()))
+            }
+
+            // all_to_all_list
+            {
+                let input_tensors: [_; WORLD_SIZE] =
+                    from_fn(|_| Tensor::ones(shape, (kind, device)) * (rank + 1) as i64);
+                let mut output_tensors: [_; WORLD_SIZE] =
+                    from_fn(|_| Tensor::zeros(shape, (kind, device)));
+
+                process_group
+                    .all_to_all(input_tensors.as_slice(), output_tensors.as_mut_slice())
+                    .unwrap();
+
+                output_tensors.into_iter().enumerate().for_each(|(i, output_tensor)| {
+                    assert!(output_tensor.equal(&(output_tensor.ones_like() * (i + 1) as i64)));
+                });
+            }
+
+            // all_to_all_single
+            {
+                let input_tensor =
+                    Tensor::ones([shape[0] * WORLD_SIZE as i64, shape[1]], (kind, device))
+                        * (rank + 1) as i64;
+                let mut output_tensor =
+                    Tensor::zeros([shape[0] * WORLD_SIZE as i64, shape[1]], (kind, device));
+
+                process_group
+                    .all_to_all_single(
+                        &input_tensor,
+                        &mut output_tensor,
+                        from_fn::<_, WORLD_SIZE, _>(|_| shape[0]),
+                        from_fn::<_, WORLD_SIZE, _>(|_| shape[0]),
+                    )
+                    .unwrap();
+
+                output_tensor.chunk(WORLD_SIZE as i64, 0).into_iter().enumerate().for_each(
+                    |(i, output_tensor)| {
+                        assert!(output_tensor.equal(&(output_tensor.ones_like() * (i + 1) as i64)));
+                    },
+                )
+            }
+
+            // gather
+            {
+                let input_tensor = Tensor::ones(shape, (kind, device)) * (rank + 1) as i64;
+
+                process_group.gather_send(&input_tensor, 0).unwrap();
+            }
+
+            // scatter
+            {
+                let mut output_tensor = Tensor::zeros(shape, (kind, device));
+
+                process_group.scatter_receive(&mut output_tensor, 0).unwrap();
+
+                assert_eq!(output_tensor, Tensor::ones(shape, (kind, device)) * (rank + 1) as i64);
+            }
+        }
     }
 }

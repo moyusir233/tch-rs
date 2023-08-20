@@ -172,7 +172,8 @@ fn extract<P: AsRef<Path>>(filename: P, outpath: P) -> anyhow::Result<()> {
 }
 
 fn env_var_rerun(name: &str) -> Result<String, env::VarError> {
-    println!("cargo:rerun-if-env-changed={name}");
+    // 避免rebuild
+    // println!("cargo:rerun-if-env-changed={name}");
     env::var(name)
 }
 
@@ -201,7 +202,7 @@ fn get_out_dir() -> &'static Path {
         let out_dir = OUT_DIR.lock().unwrap();
         out_dir.get_or_init(|| {
             PathBuf::from(
-                env_var_rerun("OUT_DIR").context("failed to get cargo `OUT_DIR`").unwrap(),
+                std::env::var("OUT_DIR").context("failed to get cargo `OUT_DIR`").unwrap(),
             )
         }) as *const PathBuf
     };
