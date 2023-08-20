@@ -933,7 +933,7 @@ mod nccl_process_group {
         }
     }
 
-    // FIXME
+    // TODO: 需要改为多进程的测试
     #[test]
     #[ignore]
     fn gather() {
@@ -1004,7 +1004,7 @@ mod nccl_process_group {
             "Output tensors: {output_tensors:?} is different with expected tensors: {expected_tensors:?}"
         )
     }
-    // FIXME
+    // TODO: 需要改为多进程的测试
     #[test]
     #[ignore]
     fn scatter() {
@@ -1161,7 +1161,7 @@ mod nccl_process_group {
         }
     }
 
-    // FIXME
+    // TODO: 需要改为多进程的测试
     #[test]
     #[ignore]
     fn all_to_all_single() {
@@ -1218,7 +1218,7 @@ mod nccl_process_group {
         }
     }
 
-    // FIXME
+    // TODO: 需要改为多进程的测试
     #[test]
     #[ignore]
     fn all_to_all_list() {
@@ -1269,7 +1269,7 @@ mod nccl_process_group {
         }
     }
 
-    // FIXME
+    // TODO: 需要改为多进程的测试
     #[ignore]
     #[test]
     fn p2p() {
@@ -1331,5 +1331,52 @@ mod nccl_process_group {
         assert!(output_tensor.equal(&expected_tensor),
                 "Output tensors: {output_tensor:?} is different with expected tensors: {expected_tensor:?}"
             )
+    }
+
+    #[test]
+    fn process_rank0() {
+        let device = crate::Device::Cuda(0);
+        let mut process_group = ProcessGroupNCCL::new(
+            "process_rank_test",
+            "127.0.0.1:80".parse().unwrap(),
+            None,
+            2,
+            0,
+            crate::Device::Cuda(0),
+            None,
+        );
+
+        process_group.barrier().unwrap();
+        println!("process_group sync complete");
+
+        let shape = [5, 5];
+        let kind = Kind::Float;
+        let input_tensor = Tensor::ones(shape, (kind, device));
+
+        process_group.send(&input_tensor, 1).unwrap();
+    }
+
+    #[test]
+    fn process_rank1() {
+        let device = crate::Device::Cuda(1);
+        let mut process_group = ProcessGroupNCCL::new(
+            "process_rank_test",
+            "127.0.0.1:80".parse().unwrap(),
+            None,
+            2,
+            1,
+            crate::Device::Cuda(1),
+            None,
+        );
+
+        process_group.barrier().unwrap();
+        println!("process_group sync complete");
+
+        let shape = [5, 5];
+        let kind = Kind::Float;
+        let mut output_tensor = Tensor::zeros(shape, (kind, device));
+
+        process_group.receive(&mut output_tensor, 0).unwrap();
+        assert!(output_tensor.equal(&output_tensor.ones_like()))
     }
 }
