@@ -14,7 +14,7 @@
 		"--gpus=all",
 		"--ipc=host"
 	],
-	"postStartCommand": "export CARGO_TEST_CUDA_DEVICE_COUNT=2 && cargo test",
+	"postStartCommand": "export CARGO_TEST_CUDA_DEVICE_COUNT=4 && cargo test",
 	"hostRequirements": {
 		"gpu": true
 	}

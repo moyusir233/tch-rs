@@ -1118,7 +1118,7 @@ mod nccl_process_group {
                 "process_rank_test",
                 "127.0.0.1:80".parse().unwrap(),
                 None,
-                2,
+                WORLD_SIZE,
                 rank as i64,
                 device,
                 None,
@@ -1220,7 +1220,7 @@ mod nccl_process_group {
                 "process_rank_test",
                 "127.0.0.1:80".parse().unwrap(),
                 None,
-                2,
+                WORLD_SIZE,
                 rank as i64,
                 device,
                 None,
@@ -1234,9 +1234,11 @@ mod nccl_process_group {
 
             // p2p test
             {
-                let mut output_tensor = Tensor::zeros(shape, (kind, device));
-                process_group.receive(&mut output_tensor, 0).unwrap();
-                assert!(output_tensor.equal(&output_tensor.ones_like()))
+                if rank == 1 {
+                    let mut output_tensor = Tensor::zeros(shape, (kind, device));
+                    process_group.receive(&mut output_tensor, 0).unwrap();
+                    assert!(output_tensor.equal(&output_tensor.ones_like()))
+                }
             }
 
             // all_to_all_list
