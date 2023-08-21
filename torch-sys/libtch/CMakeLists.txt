@@ -117,3 +117,8 @@ target_link_options("${lib_name}" PUBLIC "${link_flags}")
 
 target_link_libraries("${lib_name}" "${TORCH_LIBRARIES}")
 install(TARGETS "${lib_name}" DESTINATION .)
+
+if(NOT CARGO_BUILD)
+   # 用于cpp侧专门的debug 
+   add_subdirectory(tests/playground)
+endif()
