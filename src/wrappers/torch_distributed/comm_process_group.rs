@@ -1,8 +1,8 @@
 use crate::error::TchResult;
 use crate::wrappers::cxx_wrappers_utils::CppArc;
 use crate::{TchError, Tensor};
-use autocxx::WithinUniquePtr;
 use autocxx::cxx::UniquePtr;
+use autocxx::WithinUniquePtr;
 use smallvec::SmallVec;
 use std::ffi::CStr;
 use std::time::Duration;

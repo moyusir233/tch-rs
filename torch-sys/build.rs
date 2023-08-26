@@ -390,6 +390,7 @@ impl TchCmakeBuilder {
         &self,
         cmake_config: &mut cmake::Config,
         lib_name: &str,
+        static_link: bool,
         use_cuda: bool,
         use_hip: bool,
     ) {
@@ -405,9 +406,16 @@ impl TchCmakeBuilder {
         // if cfg!(test) {
         //     cmake_config.define("CARGO_TEST", "ON");
         // }
-        // 表示进行链接时优化lto
-        #[cfg(feature = "lto")]
-        {
+        // 表示进行静态链接
+        if static_link {
+            cmake_config.define("CARGO_STATIC_lINK", "ON");
+        }
+        // release模式下不允许动态链接
+        if !cfg!(debug_assertions) {
+            if !static_link {
+                panic!("dynamic linking is not allowed in release mode!")
+            }
+            // release profile下启用跨语言的lto优化
             cmake_config.define("CARGO_LTO", "ON");
         }
         // 设置lib名称
@@ -434,9 +442,16 @@ impl TchCmakeBuilder {
         cmake_config.define("CARGO_TORCH_DIR", &self.torch_cmake_dir);
     }
 
-    fn build(&self, cmake_file_dir: PathBuf, lib_name: &str, use_cuda: bool, use_hip: bool) {
+    fn build(
+        &self,
+        cmake_file_dir: PathBuf,
+        lib_name: &str,
+        static_link: bool,
+        use_cuda: bool,
+        use_hip: bool,
+    ) {
         let mut cmake_config = cmake::Config::new(cmake_file_dir);
-        self.config_cmake(&mut cmake_config, lib_name, use_cuda, use_hip);
+        self.config_cmake(&mut cmake_config, lib_name, static_link, use_cuda, use_hip);
 
         let dst = cmake_config.build();
         dst.try_exists().expect("failed to cmake build");
@@ -537,8 +552,9 @@ impl SystemInfo {
         };
         let libtorch_lib_dir = libtorch_lib_dir.expect("no libtorch lib dir found");
         let link_type = match env_var_rerun("LIBTORCH_STATIC").as_deref() {
-            Err(_) | Ok("0") | Ok("false") | Ok("FALSE") => LinkType::Dynamic,
-            Ok(_) => LinkType::Static,
+            Ok("0") | Ok("false") | Ok("FALSE") => LinkType::Dynamic,
+            // 默认静态链接
+            _ => LinkType::Static,
         };
         Ok(Self {
             os,
@@ -771,7 +787,13 @@ impl SystemInfo {
                 // 源文件
                 cmake_builder.src.extend(src);
                 // 进行编译
-                cmake_builder.build(libtorch_binding_dir, lib_name, use_cuda, use_hip);
+                cmake_builder.build(
+                    libtorch_binding_dir,
+                    lib_name,
+                    matches!(self.link_type, LinkType::Static),
+                    use_cuda,
+                    use_hip,
+                );
             }
             Os::Windows => unimplemented!(),
         };
@@ -822,11 +844,11 @@ fn main() -> anyhow::Result<()> {
         println!("cargo:rustc-link-search={}", si_lib.display());
 
         if system_info.link_type != LinkType::Static {
-            // 相比原来make函数中利用cc的编译,cmake函数中利用cmake的编译过程已经将所依赖的libtorch的库
-            // 链接到了libtch中,因此rust这一侧不再需要link相关依赖,但目前用的还是动态链接,
-            // 静态链接还未测试
             system_info.cmake("tch", use_cuda, use_hip);
             println!("cargo:rustc-link-lib=tch");
+        } else {
+            system_info.cmake("tch", use_cuda, use_hip);
+            println!("cargo:rustc-link-lib=static=tch");
 
             if use_cuda {
                 println!("cargo:rustc-link-search=/usr/local/cuda/lib64");
@@ -871,57 +893,6 @@ fn main() -> anyhow::Result<()> {
             system_info.link("torch_cpu");
             system_info.link("torch");
             system_info.link("c10");
-            if use_hip {
-                system_info.link("c10_hip");
-            }
-        } else {
-            system_info.make("tch", use_cuda, use_hip);
-            println!("cargo:rustc-link-lib=static=tch");
-
-            if use_cuda {
-                println!("cargo:rustc-link-search=/usr/local/cuda/lib");
-                system_info.link("torch_cuda");
-                system_info.link("c10_cuda");
-                system_info.link("cudart");
-            }
-            if use_cuda_cu {
-                system_info.link("torch_cuda_cu")
-            }
-            if use_cuda_cpp {
-                system_info.link("torch_cuda_cpp")
-            }
-            if use_hip {
-                system_info.link("torch_hip")
-            }
-            if cfg!(feature = "python-extension") {
-                system_info.link("torch_python")
-            }
-
-            // TODO: this has only be tried out on the cpu version. Check that it works
-            // with cuda too and maybe just try linking all available files?
-            // system_info.link("asmjit");
-            // system_info.link("clog");
-            // system_info.link("cpuinfo");
-            // system_info.link("dnnl");
-            // system_info.link("dnnl_graph");
-            // system_info.link("fbgemm");
-            // system_info.link("gloo");
-            // system_info.link("kineto");
-            // system_info.link("nnpack");
-            // system_info.link("onnx");
-            // system_info.link("onnx_proto");
-            // system_info.link("protobuf");
-            // system_info.link("pthreadpool");
-            // system_info.link("pytorch_qnnpack");
-            // system_info.link("sleef");
-            // system_info.link("tensorpipe");
-            // system_info.link("tensorpipe_uv");
-            // system_info.link("XNNPACK");
-
-            // system_info.link("torch_cpu");
-            // system_info.link("torch");
-            // system_info.link("c10");
-            // system_info.link("c10_cuda");
             if use_hip {
                 system_info.link("c10_hip");
             }

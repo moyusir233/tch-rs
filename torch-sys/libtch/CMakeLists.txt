@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.9 FATAL_ERROR)
 
 include(CMakeDependentOption)
 option(CARGO_BUILD "build with cargo" OFF)
-CMAKE_DEPENDENT_OPTION(CARGO_LTO "compile with link time optimization" OFF "CARGO_BUILD" OFF)
+CMAKE_DEPENDENT_OPTION(CARGO_STATIC_lINK "compile as a static library to link with the cargo side" OFF "CARGO_BUILD" OFF)
+CMAKE_DEPENDENT_OPTION(CARGO_LTO "compile with link time optimization" OFF "CARGO_STATIC_lINK" OFF)
 CMAKE_DEPENDENT_OPTION(CARGO_TEST "build with cargo test" OFF "CARGO_BUILD" OFF)
 CMAKE_DEPENDENT_OPTION(USE_CUDA "enable cuda" ON "CARGO_BUILD" ON)
 
@@ -97,8 +98,13 @@ include_directories("${TORCH_INCLUDE_DIRS}")
 # 导入自定义的头文件
 include_directories("${header_dirs}")
 
-# 创建动态库
-add_library("${lib_name}" "${src}")
+if(CARGO_STATIC_lINK)
+    add_compile_definitions(CARGO_STATIC_LINK)
+    add_library("${lib_name}" "${src}")
+else()
+    add_library("${lib_name}" SHARED "${src}")
+endif()
+
 
 if (CARGO_LTO)
     # 开启lto所需的编译与链接选项
