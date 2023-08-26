@@ -1,4 +1,4 @@
-use cxx::UniquePtr;
+use autocxx::cxx::UniquePtr;
 pub use torch_sys::wrappers::utils::CppArcClone;
 
 /// 负责包装`torch_sys`crate中具有cpp arc语义的cxx wrapper,

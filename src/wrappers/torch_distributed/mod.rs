@@ -3,4 +3,4 @@ pub mod comm_store {
 }
 pub mod comm_process_group;
 
-pub use cxx::UniquePtr;
+pub use autocxx::cxx::UniquePtr;

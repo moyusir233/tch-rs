@@ -1,4 +1,4 @@
-use cxx::UniquePtr;
+use autocxx::cxx::UniquePtr;
 use std::pin::Pin;
 
 use crate::error::TchResult;

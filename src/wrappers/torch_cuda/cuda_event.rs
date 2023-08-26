@@ -18,7 +18,7 @@ pub struct CUDAEventFlagsConfig {
 }
 
 impl CUDAEventBuilder {
-    pub fn build(&mut self) -> cxx::UniquePtr<CUDAEvent> {
+    pub fn build(&mut self) -> autocxx::cxx::UniquePtr<CUDAEvent> {
         let mut flags = 0;
         let blocking = self.blocking_sync.unwrap_or(false);
         let disable_timing = self.disable_timing.unwrap_or(false);

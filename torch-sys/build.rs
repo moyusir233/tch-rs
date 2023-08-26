@@ -232,8 +232,8 @@ impl SourceFileManager {
         &self,
         cxx_rs_relative_dir: impl AsRef<Path>,
         cxx_wrapper_file_name: &str,
-    ) {
-        let _ = cxx_build::bridges(get_all_file_path(cxx_rs_relative_dir).iter().filter(|path| {
+    ) -> cc::Build {
+        cxx_build::bridges(get_all_file_path(cxx_rs_relative_dir).iter().filter(|path| {
             if path.is_dir() {
                 return false;
             }
@@ -242,20 +242,20 @@ impl SourceFileManager {
                 .map(|file_name| file_name == cxx_wrapper_file_name)
                 .context("failed to get file name")
                 .unwrap()
-        }));
+        }))
     }
     // 生成autocxx相关的源文件
     fn generate_autocxx_wrapper<P: AsRef<Path>, I: IntoIterator<Item = P>>(
         &self,
         header_dirs: I,
         autocxx_rs_file: impl AsRef<Path>,
-    ) {
+    ) -> cc::Build {
         let header_dirs: Vec<P> = header_dirs.into_iter().collect();
         autocxx_build::Builder::new(&autocxx_rs_file, header_dirs.iter().map(AsRef::as_ref))
             .extra_clang_args(&["-D", "USE_C10D_NCCL=1"]) // 解析头文件时所需要的额外参数
             .build()
             .context("failed to generate autocxx binding!")
-            .unwrap();
+            .unwrap()
     }
 }
 
@@ -819,7 +819,7 @@ fn main() -> anyhow::Result<()> {
             || si_lib.join("torch_cuda_cpp.dll").exists();
         let use_hip =
             si_lib.join("libtorch_hip.so").exists() || si_lib.join("torch_hip.dll").exists();
-        println!("cargo:rustc-link-search=native={}", si_lib.display());
+        println!("cargo:rustc-link-search={}", si_lib.display());
 
         if system_info.link_type != LinkType::Static {
             // 相比原来make函数中利用cc的编译,cmake函数中利用cmake的编译过程已经将所依赖的libtorch的库
@@ -827,15 +827,12 @@ fn main() -> anyhow::Result<()> {
             // 静态链接还未测试
             system_info.cmake("tch", use_cuda, use_hip);
             println!("cargo:rustc-link-lib=tch");
-        } else {
-            // 用于条件编译,避免引入cxx_wrapper mod
-            println!("cargo:rustc-cfg=libtorch_static_link");
-
-            system_info.make("tch", use_cuda, use_hip);
-            println!("cargo:rustc-link-lib=static=tch");
 
             if use_cuda {
-                system_info.link("torch_cuda")
+                println!("cargo:rustc-link-search=/usr/local/cuda/lib64");
+                system_info.link("torch_cuda");
+                system_info.link("c10_cuda");
+                system_info.link("cudart");
             }
             if use_cuda_cu {
                 system_info.link("torch_cuda_cu")
@@ -852,28 +849,79 @@ fn main() -> anyhow::Result<()> {
 
             // TODO: this has only be tried out on the cpu version. Check that it works
             // with cuda too and maybe just try linking all available files?
-            system_info.link("asmjit");
-            system_info.link("clog");
-            system_info.link("cpuinfo");
-            system_info.link("dnnl");
-            system_info.link("dnnl_graph");
-            system_info.link("fbgemm");
-            system_info.link("gloo");
-            system_info.link("kineto");
-            system_info.link("nnpack");
-            system_info.link("onnx");
-            system_info.link("onnx_proto");
-            system_info.link("protobuf");
-            system_info.link("pthreadpool");
-            system_info.link("pytorch_qnnpack");
-            system_info.link("sleef");
-            system_info.link("tensorpipe");
-            system_info.link("tensorpipe_uv");
-            system_info.link("XNNPACK");
+            // system_info.link("asmjit");
+            // system_info.link("clog");
+            // system_info.link("cpuinfo");
+            // system_info.link("dnnl");
+            // system_info.link("dnnl_graph");
+            // system_info.link("fbgemm");
+            // system_info.link("gloo");
+            // system_info.link("kineto");
+            // system_info.link("nnpack");
+            // system_info.link("onnx");
+            // system_info.link("onnx_proto");
+            // system_info.link("protobuf");
+            // system_info.link("pthreadpool");
+            // system_info.link("pytorch_qnnpack");
+            // system_info.link("sleef");
+            // system_info.link("tensorpipe");
+            // system_info.link("tensorpipe_uv");
+            // system_info.link("XNNPACK");
 
             system_info.link("torch_cpu");
             system_info.link("torch");
             system_info.link("c10");
+            if use_hip {
+                system_info.link("c10_hip");
+            }
+        } else {
+            system_info.make("tch", use_cuda, use_hip);
+            println!("cargo:rustc-link-lib=static=tch");
+
+            if use_cuda {
+                println!("cargo:rustc-link-search=/usr/local/cuda/lib");
+                system_info.link("torch_cuda");
+                system_info.link("c10_cuda");
+                system_info.link("cudart");
+            }
+            if use_cuda_cu {
+                system_info.link("torch_cuda_cu")
+            }
+            if use_cuda_cpp {
+                system_info.link("torch_cuda_cpp")
+            }
+            if use_hip {
+                system_info.link("torch_hip")
+            }
+            if cfg!(feature = "python-extension") {
+                system_info.link("torch_python")
+            }
+
+            // TODO: this has only be tried out on the cpu version. Check that it works
+            // with cuda too and maybe just try linking all available files?
+            // system_info.link("asmjit");
+            // system_info.link("clog");
+            // system_info.link("cpuinfo");
+            // system_info.link("dnnl");
+            // system_info.link("dnnl_graph");
+            // system_info.link("fbgemm");
+            // system_info.link("gloo");
+            // system_info.link("kineto");
+            // system_info.link("nnpack");
+            // system_info.link("onnx");
+            // system_info.link("onnx_proto");
+            // system_info.link("protobuf");
+            // system_info.link("pthreadpool");
+            // system_info.link("pytorch_qnnpack");
+            // system_info.link("sleef");
+            // system_info.link("tensorpipe");
+            // system_info.link("tensorpipe_uv");
+            // system_info.link("XNNPACK");
+
+            // system_info.link("torch_cpu");
+            // system_info.link("torch");
+            // system_info.link("c10");
+            // system_info.link("c10_cuda");
             if use_hip {
                 system_info.link("c10_hip");
             }

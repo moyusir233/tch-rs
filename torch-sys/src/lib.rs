@@ -4,8 +4,6 @@ pub mod io;
 pub mod python;
 mod traits;
 
-// 静态链接还未测试,因此先用条件编译过滤掉cxx_wrapper中需要链接libtorch的源文件
-#[cfg(not(libtorch_static_link))]
 pub mod wrappers;
 
 use libc::{c_char, c_int, c_uchar, c_void, size_t};

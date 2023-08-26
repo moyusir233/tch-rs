@@ -84,6 +84,7 @@ endif ()
 #   TORCH_CXX_FLAGS    -- Additional (required) compiler flags
 find_package(Torch REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+message("torch lib:\n${TORCH_LIBRARIES}")
 
 if (USE_CUDA)
     # 导入cuda相关的头文件
@@ -97,7 +98,7 @@ include_directories("${TORCH_INCLUDE_DIRS}")
 include_directories("${header_dirs}")
 
 # 创建动态库
-add_library("${lib_name}" SHARED "${src}")
+add_library("${lib_name}" "${src}")
 
 if (CARGO_LTO)
     # 开启lto所需的编译与链接选项

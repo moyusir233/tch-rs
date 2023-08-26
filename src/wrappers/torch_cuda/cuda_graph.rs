@@ -1,4 +1,4 @@
-use cxx::UniquePtr;
+use autocxx::cxx::UniquePtr;
 use std::pin::Pin;
 pub use torch_sys::wrappers::torch_cuda::cuda_graph::{CUDAGraph, MemPoolId};
 use torch_sys::wrappers::torch_cuda::cuda_guard::CUDAStreamGuard;
@@ -77,7 +77,7 @@ impl CUDAGraphExt for CUDAGraph {
         Ok(())
     }
 }
-impl<G: CUDAGraphExt + cxx::memory::UniquePtrTarget> CUDAGraphExt for UniquePtr<G> {
+impl<G: CUDAGraphExt + autocxx::cxx::memory::UniquePtrTarget> CUDAGraphExt for UniquePtr<G> {
     fn record<T>(
         self: Pin<&mut Self>,
         capture_stream: Option<&CUDAStream>,

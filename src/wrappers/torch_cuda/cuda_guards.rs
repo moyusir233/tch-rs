@@ -1,12 +1,12 @@
-use cxx::memory::UniquePtrTarget;
+use autocxx::cxx::memory::UniquePtrTarget;
 pub use torch_sys::wrappers::torch_cuda::cuda_guard::*;
 
 use crate::error::TchResult;
 
-/// 描述被cxx包装的Guard的初始化trait
+/// 描述被autocxx::cxx包装的Guard的初始化trait
 pub trait InitGuard<'a>: UniquePtrTarget + Sized {
     type GuardItem;
-    fn new(guard_item: Self::GuardItem) -> cxx::UniquePtr<Self>;
+    fn new(guard_item: Self::GuardItem) -> autocxx::cxx::UniquePtr<Self>;
 }
 
 /// 简化RAII Guard使用的trait
@@ -26,7 +26,7 @@ macro_rules! impl_guard_scope {
     ($guard_type:ty,$guard_item:ty) => {
         impl InitGuard<'_> for $guard_type {
             type GuardItem = $guard_item;
-            fn new(guard_item: Self::GuardItem) -> cxx::UniquePtr<Self> {
+            fn new(guard_item: Self::GuardItem) -> autocxx::cxx::UniquePtr<Self> {
                 Self::new(guard_item)
             }
         }
@@ -36,7 +36,7 @@ macro_rules! impl_guard_scope {
     ($guard_type:ty,$guard_item:ty,$lt:lifetime) => {
         impl<$lt> InitGuard<$lt> for $guard_type {
             type GuardItem = &$lt $guard_item;
-            fn new(guard_item: Self::GuardItem) -> cxx::UniquePtr<Self> {
+            fn new(guard_item: Self::GuardItem) -> autocxx::cxx::UniquePtr<Self> {
                 Self::new(guard_item)
             }
         }

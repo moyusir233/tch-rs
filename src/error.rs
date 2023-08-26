@@ -66,7 +66,7 @@ pub enum TchError {
 
     /// Cxx internal error
     #[error(transparent)]
-    Cxx(#[from] cxx::Exception),
+    Cxx(#[from] autocxx::cxx::Exception),
 
     /// distributed communication error
     #[error("Distributed communication: {0}")]
