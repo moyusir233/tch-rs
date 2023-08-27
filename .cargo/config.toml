@@ -1,28 +1,6 @@
 [build]
-# 默认使用lld加快链接
 rustflags=[
-    "-C",
-    "link-arg=-fuse-ld=lld-16",
-]
-
-# release profile下启用跨语言的lto优化
-# FIXME debug_assertions不能作为cfg的条件
-[target.'cfg(all(not(debug_assertions),target_os="linux"))']
-rustflags=[
-    "-C",
-    "link-arg=-Wl,--allow-shlib-undefined",
-    "-C",
-    "link-arg=-fuse-ld=lld-16",
-    "-C",
-    "linker=clang-16",
-    "-C",
-    "linker-plugin-lto",
-]
-
-[target.'cfg(all(debug_assertions,target_os="linux"))']
-rustflags=[
-    "-C",
-    "link-arg=-Wl,--allow-shlib-undefined",
+    "-Clink-arg=-Wl,--allow-shlib-undefined",
 ]
 
 [env]
@@ -30,6 +8,7 @@ rustflags=[
 LIBTORCH_USE_PYTORCH="1"
 # 跳过版本检查,容器中安装的是pytorch 2.0.1的版本
 LIBTORCH_BYPASS_VERSION_CHECK="1"
+# 使用静态链接
 LIBTORCH_STATIC="1"
 
 [source.crates-io]

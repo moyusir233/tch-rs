@@ -411,9 +411,9 @@ impl TchCmakeBuilder {
             cmake_config.define("CARGO_STATIC_lINK", "ON");
         }
         // release模式下不允许动态链接
-        if !cfg!(debug_assertions) {
+        if cfg!(enable_lto) {
             if !static_link {
-                panic!("dynamic linking is not allowed in release mode!")
+                panic!("dynamic linking is not allowed with lto optim!")
             }
             // release profile下启用跨语言的lto优化
             cmake_config.define("CARGO_LTO", "ON");
@@ -803,7 +803,8 @@ impl SystemInfo {
             LinkType::Dynamic => println!("cargo:rustc-link-lib={lib_name}"),
             LinkType::Static => {
                 // TODO: whole-archive might only be necessary for libtorch_cpu?
-                println!("cargo:rustc-link-lib=static:+whole-archive,-bundle={lib_name}")
+                // println!("cargo:rustc-link-lib=static:+whole-archive,-bundle={lib_name}")
+                println!("cargo:rustc-link-lib={lib_name}")
             }
         }
     }
